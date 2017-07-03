@@ -1,0 +1,16 @@
+[package]
+name = "ruby_parser"
+version = "0.1.0"
+authors = ["take_cheeze <takechi101010@gmail.com>"]
+build = "build.rs"
+
+[build-dependencies]
+lalrpop = "0.13.1"
+
+[dependencies]
+lalrpop-util = "0.13.1"
+regex = "0.2.1"
+string_cache = "0.6"
+
+[replace]
+"lalrpop:0.13.1" = { path = 'lalrpop/lalrpop' }

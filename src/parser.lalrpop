@@ -1,0 +1,863 @@
+use ast::NodeRef;
+use ast::OptNodeRef;
+use ast::CpathType;
+use lexer::Lexer;
+use lexer::LexerState
+use lexer::Tok;
+use lalrpop_util::ParseError;
+
+grammar<'state>(p: &mut Lexer<'state>);
+
+extern {
+  type Location = lexer::Location;
+  type Error = lexer::LexerError;
+
+  enum lexer::Tok<'input> {
+    "alias" => Tok::Alias,
+    "undef" => Tok::Undef,
+    "BEGIN" => Tok::BEGIN,
+    "END" => Tok::BEGIN,
+
+    "{" => Tok::Char('{'),
+    "}" => Tok::Char('}'),
+    "=" => Tok::Char('='),
+    "!" => Tok::Char('!'),
+
+    "op_asgn" => Tok::op_asgn(<Symbol>),
+    "ident" => Tok::Ident(<Symbol>),
+    "fid" => Tok::FID(<Symbol>),
+    "gvar" => Tok::GVar(<Symbol>),
+    "ivar" => Tok::IVar(<Symbol>),
+    "const" => Tok::Const(<Symbol>),
+    "cvar" => Tok::CVar(<Symbol>),
+    "label" => Tok::Label(<Symbol>),
+
+    "colon2" => Tok::Colon2,
+
+    "mod_if" => Tok::ModifierIf,
+    "mod_unless" => Tok::ModifierUnless,
+    "mod_while" => Tok::ModifierWhile,
+    "mod_until" => Tok::ModifierUntil,
+    "mod_rescue" => Tok::ModifierRescue,
+
+    "and" => Tok::And,
+    "or" => Tok::Or,
+    "not" => Tok::Not,
+    "super" => Tok::Super,
+    "yield" => Tok::Yield,
+    "return" => Tok::Return,
+    "break" => Tok::Break,
+    "next" => Tok::Next,
+
+    "lbrace_arg" => Tok::LbraceArg,
+    "star" => Tok::Star,
+  }
+}
+
+Program: NodeRef = { <t:Topstmt> OptTerms => t };
+
+TopStmts: BeginNodeRef = {
+  None => p.new_begin(None),
+  <t:TopStmt> => p.new_begin(Some(t)),
+  <stmts:TopStmts> Terms <t:TopStmt> => { stmts.push(t); stmts },
+  Error <t:TopStmt> => p.new_begin(None),
+};
+
+TopStmt: NodeRef = {
+  Stmt,
+  "BEGIN" "{" TopComstmt "}" => {
+    Err("BEGIN not supported")
+  }
+};
+
+Bodystmt: NodeRef = {
+  <c:Compstmt> <r:OptRescue> <el:OptElse> <en:OptEnsure> => {
+    p.new_bodystmt(c, r, el, en)
+  }
+};
+
+Compstmt: Vec<NodeRef> = { <s:Stmts> OptTerms => s };
+
+Stmts: Vec<NodeRef> = {
+  None => vec![],
+  Stmt => vec![<>],
+  <res:Stmts> terms <s:Stmt> => { res.push(s); res },
+  Error <s:Stmt> => vec![s],
+};
+
+Stmt: NodeRef = {
+  "alias" <a:AliasFsym> <f:Fsym> => p.new_alias(a, f),
+  "undef" <l:UndefList> => p.new_undef(l),
+  <s:Stmt> "mod_if" <e:ExprValue> => p.new_if(p.cond(e) s, None),
+  <s:Stmt> "mod_unless" <e:ExprValue> => p.new_unless(p.cond(e), s, None),
+  <s:Stmt> "mod_while" <e:ExprValue> => p.new_while(p.cond(e), s),
+  <s:Stmt> "mod_until" <e:ExprValue> => p.new_until(p.cond(e), s),
+  <s:Stmt> "mod_rescue" <r:Stmt> => p.new_mod_rescue(s, r),
+  "END" "{" <s:Compstmt> "}" => Err("END not supported"),
+  CommandAsgn,
+  <l:Mlhs> "=" <c:CommandCall> => p.new_masgn(l, c),
+  <l:Lhs> "=" <r:Mrhs> => p.new_asgn(l, p.new_array(r)),
+  <l:Mlhs> "=" <a:Arg> => p.new_masgn(l, a),
+  <l:Lhs> "=" <r:Mrhs> => p.new_masgn(l, p.new_array(r)),
+  Expr
+};
+
+AliasFsym: Symbol = {
+  fsym => { p.lstate = LexerState::FNAME; <> }
+};
+
+CommandAsgn: NodeRef = {
+  <l:Lhs> "=" <r:CommandRhs> => p.new_asgn(l, r),
+  <l:VarLhs> <op:"op_asgn"> <r:CommandRhs> => p.new_op_asgn(l, op, r),
+  <prim:PrimaryValue> "[" <idx:OptCallArgs> Rbracket <op:"op_asgn"> <r:CommandRhs> =>
+    p.new_op_asgn(p.new_call(prim, Symbol::from("[]"), idx, '.'), op, r),
+  <prim:PrimaryValue> <c:CallOp> <id:"ident"> <op:"op_asgn"> <r:CommandRhs> =>
+    p.new_op_asgn(p.new_call(prim, id, vec![], c), op, r),
+  <prim:PrimaryValue> <c:CallOp> <id:"const"> <op:"op_asgn"> <r:CommandRhs> =>
+    p.new_op_asgn(p.new_call(prim, id, vec![], c), op, r),
+  <prim:PrimaryValue> "colon2" <id:"const"> <op:"op_asgn"> <r:CommandRhs> =>
+    p.new_op_asgn(p.new_call(prim, id, vec![], c), op, r),
+  <prim:PrimaryValue> "colon2" <id:"ident"> <op:"op_asgn"> <r:CommandCall> =>
+    Err("constant re-assignment"),
+  <prim:PrimaryValue> "colon2" <id:"ident"> <op:"op_asgn"> <r:CommandRhs> =>
+    p.new_op_asgn(p.new_call(prim, id, vec![], Tok::colon2), op, r),
+  <b:Backref> <op:"op_asgn"> CommandRhs => p.backref_error(b),
+};
+
+CommandRhs: NodeRef = {
+  CommandCall, // %prec "op_asgn"
+  <c:CommandCall> "mod_rescue" <s:Stmt> => p.new_mod_rescue(c, s),
+  CommandAsgn,
+};
+
+Expr: NodeRef = {
+  CommandCall,
+  <l:Expr> "and" <r:Expr> => p.new_and(l, r),
+  <l:Expr> "or" <r:Expr> => p.new_or(l, r),
+  "not" OptNl <e:Expr> => p.call_uni_op(p.cond(e), "!"),
+  "!" <c:CommandCall> => p.call_uni_op(p.cond(e), "!"),
+  Arg
+};
+
+ExprValue: NodeRef = { Expr };
+
+CommandCall: NodeRef = { Command, BlockCommand };
+
+BlockCommand: NodeRef = {
+  BlockCall,
+  <b:BlockCall> <c:CallOp2> <o:Operation2> <args:CommandArgs> =>
+    p.new_call(b, c, o, args),
+};
+
+CmdBraceBlock: NodeRef = {
+  CmdBraceBlockBegin <b:OptBlockParam> <c:Compstmt> "}" => {
+    let ret = p.new_block(b, c);
+    p.local_unnest();
+    ret
+  }
+};
+
+CmdBraceBlockBegin: () = { "lbrace_arg" => p.local_nest() };
+
+Command: NodeRef = {
+  <op:Operation> <c:CommandArgs> => p.new_fcall(op, c), // %prec tLOWEST
+  <op:Operation> <c:CommandArgs> <b:CmdBraceBlock> => {
+    p.args_with_block(c, b);
+    p.new_fcall(op, c)
+  },
+  <prim:PrimaryValue> <c_op:CallOp> <op:Operation2> <c:CommandArgs> => // %prec tLOWEST
+    p.new_call(prim, op, c, c_op),
+  <prim:PrimaryValue> <c_op:CallOp> <op:Operation2> <c:CommandArgs> <b:CmdBraceBlock> => {
+    p.args_with_block(c, b);
+    p.new_call(prim, op, c, c_op)
+  },
+  <prim:PrimaryValue> "colon2" <op:Operation2> <c:CommandArgs> => // %prec tLOWEST
+    p.new_call(prim, op, c, Symbol::from("::")),
+  <prim:PrimaryValue> "colon2" <op:Operation2> <c:CommandArgs> <b:CmdBraceBlock> => {
+    p.args_with_block(c, b);
+    p.new_call(prim, op, c, Symbol::from("::"))
+  },
+  "super" <c:CommandArgs> => p.new_super(c),
+  "yield" <c:CommandArgs> => p.new_yield(c),
+  "return" <c:CallArgs> => p.new_return(p.ret_args(c)),
+  "break" <c:CallArgs> => p.new_break(p.ret_args(c)),
+  "next" <c:CallArgs> => p.new_next(p.ret_args(c)),
+};
+
+Mlhs: Vec<NodeRef> = {
+  MlhsBasic,
+  "lparen" <MlhsInner> Rparen => <>,
+};
+
+MlhsInnter: Vec<NodeRef> = {
+  MlhsBasic,
+  "lparen" <MlhsInner> Rparen => <>,
+};
+
+MlhsBasic: (Vec<NodeRef>, Option<OptNodeRef>, Vec<NodeRef>) = {
+  <MlhsList> => (<>, None, vec![]),
+  <l:MlhsList> <i:MlhsItem> => { l.push(i); (l, None, vec![]) },
+  <l:MlhsList> "star" <n:MlhsNode> => (l, Some(Some(n)), vec![]),
+  <l:MlhsList> "star" <n:MlhsNode> "," <post:MlhsPost> => (l, Some(Some(n)), post),
+  <l:MlhsList> "star" => (l, Some(None), vec![]),
+  <l:MlhsList> "star" "," <post:MlhsPost> => (l, Some(None), post),
+  "star" <n:MlhsNode> => (vec![], Some(Some(n)), vec![]),
+  "star" <n:MlhsNode> "," <post:MlhsPost> => (vec![], Some(Some(n)), post),
+  "star" => (vec![], Some(None), vec![]),
+  "star" "," <post:MlhsPost> => (vec![], Some(None), post),
+};
+
+MlhsItem: NodeRef = {
+  MlhsNode,
+  "lparen" <MlhsInner> Rparen => p.new_masgn(<>, vec![]),
+};
+
+MlhsList: Vec<NodeRef> = {
+  <MlhsItem> "," => vec![<>],
+  <l:MlhsList> <i:MlhsItem> "," => { l.push(i); l },
+};
+
+MlhsPost: Vec<NodeRef> = {
+  <MlhsItem> => vec![<>],
+  <l:MlhsList> <i:MlhsItem> => { l.push(i); l },
+};
+
+MlhsNode: NodeRef = { // lhs
+  <Variable> => p.assignable(<>),
+  <prim:PrimaryValue> "[" <c:OptCallArgs> Rbracket =>
+    p.new_call(prim, Symbol::from(""), c, Symbol::from(".")),
+  <prim:PrimaryValue> <c_op:CallOp> <id:"ident"> =>
+    p.new_call(prim, id, vec![], c_op),
+  <prim:PrimaryValue> "colon2" <id:"ident"> =>
+    p.new_call(prim, id, vec![], Symbol::from("::")),
+  <prim:PrimaryValue> <c_op:CallOp> <id:"const"> =>
+    p.new_call(prim, id, vec![], c_op),
+  <prim:PrimaryValue> "colon2" <id:"const"> => {
+    if (p.in_def || p.in_single)
+      return Err("dynamic constant assignment");
+    p.new_colon2(prim, id, vec![], Symbol::from("::"))
+  },
+  "colon3" <id:"const"> => {
+    if (p.in_def || p.in_single)
+      return Err("dynamic constant assignment");
+    p.new_colon3(id)
+  },
+  <b:Backref> => p.backref_error(b)
+};
+
+Lhs: NodeRef = {
+  <Variable> => p.assignable(<>),
+  <prim:PrimaryValue> "[" <c:OptCallArgs> Rbracket =>
+    p.new_call(prim, Symbol::from(""), c, Symbol::from(".")),
+  <prim:PrimaryValue> <c_op:CallOp> <id:"ident"> =>
+    p.new_call(prim, id, vec![], c_op),
+  <prim:PrimaryValue> "colon2" <id:"ident"> =>
+    p.new_call(prim, id, vec![], Symbol::from("::")),
+  <prim:PrimaryValue> <c_op:CallOp> <id:"const"> =>
+    p.new_call(prim, id, vec![], c_op),
+  <prim:PrimaryValue> "colon2" <id:"const"> => {
+    if (p.in_def || p.in_single)
+      return Err("dynamic constant assignment");
+    p.new_colon2(prim, id, vec![], Symbol::from("::"))
+  },
+  "colon3" <id:"const"> => {
+    if (p.in_def || p.in_single)
+      return Err("dynamic constant assignment");
+    p.new_colon3(id)
+  },
+  <b:Backref> => p.backref_error(b)
+};
+
+Cname: Symbol = {
+  "ident" => Err("class/module name must be CONSTANT"),
+  "const",
+};
+
+Cpath: (CpathType, Symbol) = {
+  "colon3" <Cname> => (Absolute, <>),
+  <Cname> => (Relative, <>),
+  <prim:PrimaryValue> "colon2" <c:Cname> => (Expression(prim), c),
+};
+
+Fname: Symbol = {
+  "ident", "const", "fid",
+  <Op> => { p.lstate = LexerState::ENDFN; <> },
+  <Reswords> => {  p.lstate = LexerState::ENDFN; <> },
+};
+
+Fsym: Symbol = { Fname, BasicSymbol };
+
+UndefList: Vec<Symbol> = {
+  <Fsym> => vec![<>],
+  <l:UndefList> UndefListComma <s:Fsym> => { l.push(s); l },
+};
+
+UndefListComma: () = { "," => { p.lstate = LexerState::FNAME; } };
+
+Op: Symbol = {
+  "|" => Symbol::from("|"),
+  "^" => Symbol::from("^"),
+  "&" => Symbol::from("&"),
+  "<=>" => Symbol::from("<=>"),
+  "==" => Symbol::from("=="),
+  "===" => Symbol::from("==="),
+  "=~" => Symbol::from("=~"),
+  "!~" => Symbol::from("!~"),
+  ">" => Symbol::from(">"),
+  ">=" => Symbol::from(">="),
+  "<" => Symbol::from("<"),
+  "<=" => Symbol::from("<="),
+  "!=" => Symbol::from("!="),
+  "<<" => Symbol::from("<<"),
+  ">>" => Symbol::from(">>"),
+  "+" => Symbol::from("+"),
+  "-" => Symbol::from("-"),
+  "*" => Symbol::from("*"),
+  "star" => Symbol::from("*"),
+  "/" => Symbol::from("/"),
+  "%" => Symbol::from("%"),
+  "pow" => Symbol::from("**"),
+  "!" => Symbol::from("!"),
+  "~" => Symbol::from("~"),
+  "+@" => Symbol::from("+@"),
+  "-@" => Symbol::from("-@"),
+  "[]" => Symbol::from("[]"),
+  "[]=" => Symbol::from("[]="),
+  "`" => Symbol::from("`"),
+};
+
+Reswords: () = {
+  "__LINE__", "__FILE__", "__ENCODING__", "BEGIN", "END",
+  "alias", "and", "begin", "break", "case", "class", "def",
+  "do", "else", "elsif", "end", "ensure", "false",
+  "for", "in", "module", "next", "nil", "not", "or", "redo",
+  "rescue", "retry", "return", "self",
+  "super", "then", "true", "undef", "when", "yield", "if", "unless",
+  "while", "until",
+};
+
+Arg: NodeRef = {
+  <l:Lhs> "=" <r:ArgRhs> => p.new_asgn(l, r),
+  <l:VarLhs> <op:"op_asgn"> <r:ArgRhs> => p.new_op_asgn(l, op, r),
+  <prim:PrimaryValue> "[" <c:OptCallArgs> Rbracket <op:"op_asgn"> <r:ArgRhs> =>
+    p.new_op_asgn(p.new_call(cprim, Symbol::from("[]")), op, r),
+  <prim:PrimaryValue> <c_op:CallOp> <id:"ident"> <op:"op_asgn"> <r:ArgRhs> =>
+    p.new_op_asgn(p.new_call(prim, id, vec![], c_op), op, r),
+  <prim:PrimaryValue> <c_op:CallOp> <id:"const"> <op:"op_asgn"> <r:ArgRhs> =>
+    p.new_op_asgn(p.new_call(prim, id, vec![], c_op), op, r),
+  <prim:PrimaryValue> "colon2" <id:"ident"> <op:"op_asgn"> <r:ArgRhs> =>
+    p.new_op_asgn(p.new_call(prim, id, vec![], Symbol::from("::"), op, r)),
+  <prim:PrimaryValue> "colon2" <id:"const"> <op:"op_asgn"> <r:ArgRhs> =>
+    Err("constant re-assignment"),
+  "colon3" <id:"const"> <op:"op_asgn"> <r:ArgRhs> =>
+    Err("constant re-assignment"),
+  <b:Backref> <op:"op_asgn"> <r:ArgRhs> => p.backref_error(b),
+  <l:Arg> "dot2" <r:Arg> => p.new_dot2(l, r),
+  <l:Arg> "dot3" <r:Arg> => p.new_dot3(l, r),
+  <l:Arg> "+" <r:Arg> => p.call_bin_op(l, "+", r),
+  <l:Arg> "-" <r:Arg> => p.call_bin_op(l, "-", r),
+  <l:Arg> "*" <r:Arg> => p.call_bin_op(l, "*", r),
+  <l:Arg> "/" <r:Arg> => p.call_bin_op(l, "/", r),
+  <l:Arg> "%" <r:Arg> => p.call_bin_op(l, "%", r),
+  <l:Arg> "pow" <r:Arg> => p.call_bin_op(l, "**", r),
+  "uminus_num" <l:"integer"> "pow" <r:Arg> =>
+    p.call_uni_op(p.call_bin_op(l, "**", r), "-@"),
+  "uminus_num" <l:"float"> "pow" <r:Arg> =>
+    p.call_uni_op(p.call_bin_op(l, "**", r), "-@"),
+  "uplus" <a:Arg> => p.call_uni_op(a, "+@"),
+  "uminus" <a:Arg> => p.call_uni_op(a, "-@"),
+  <l:Arg> "|" <r:Arg> => p.call_bin_op(l, "|", r),
+  <l:Arg> "^" <r:Arg> => p.call_bin_op(l, "^", r),
+  <l:Arg> "&" <r:Arg> => p.call_bin_op(l, "&", r),
+  <l:Arg> "<=>" <r:Arg> => p.call_bin_op(l, "<=>", r),
+  <l:Arg> ">" <r:Arg> => p.call_bin_op(l, ">", r),
+  <l:Arg> ">=" <r:Arg> => p.call_bin_op(l, ">=", r),
+  <l:Arg> "<" <r:Arg> => p.call_bin_op(l, "<", r),
+  <l:Arg> "<=" <r:Arg> => p.call_bin_op(l, "<=", r),
+  <l:Arg> "==" <r:Arg> => p.call_bin_op(l, "==", r),
+  <l:Arg> "===" <r:Arg> => p.call_bin_op(l, "===", r),
+  <l:Arg> "!=" <r:Arg> => p.call_bin_op(l, "!=", r),
+  <l:Arg> "=~" <r:Arg> => p.call_bin_op(l, "=~", r),
+  <l:Arg> "!~" <r:Arg> => p.call_bin_op(l, "!~", r),
+  "!" <a:Arg> => p.call_uni_op(p.cond(a), "!"),
+  "~" <a:Arg> => p.call_uni_op(p.cond(a), "~"),
+  <1:Arg> "<<" <r:Arg> => p.call_bin_op(l, "<<", r),
+  <1:Arg> ">>" <r:Arg> => p.call_bin_op(l, ">>", r),
+  <l:Arg> "&&" <r:Arg> => p.new_and(l, r),
+  <l:Arg> "||" <r:Arg> => p.new_or(l, r),
+  <c:Arg> "?" <t:Arg> OptNl ":" <f:Arg> => p.new_if(p.cond(c), t, f),
+  Primary,
+};
+
+ArefArgs: Vec<NodeRef> = {
+  None => vec![],
+  <a:Args> Trailer => a,
+  <a:Args> Comma <h:Assocs> Trailer => { a.push(p.new_hash(h)); a },
+  <h:Assocs> Trailer => { vec![p.new_hash(h)] },
+};
+
+ArgsRhs: NodeRef = {
+  <a:Arg>, // %prec "op_asgn"
+  <a:Arg> "mod_rescue" <r:Arg> => {
+    p.void_expr_error(a);
+    p.void_expr_error(r);
+    p.new_mod_rescue(a, r)
+  },
+};
+
+ParenArgs: Vec<NodeRef> => {
+  "(" <OptCallArgs> Rparen => <>,
+};
+
+OptParenArgs: Vec<NodeRef> => {
+  None => vec![],
+  ParenArgs,
+};
+
+OptCallArgs: Vec<NodeRef> = {
+  None => vec![],
+  CallArgs,
+  <Args> "," => <>,
+  <a:Args> Comma <h:Assocs> "," => { a.push(p.new_hash(h)); a },
+  <h:Assocs> "," => vec![p.new_hash(h), b],
+};
+
+CallArgs: Vec<NodeRef> = {
+  <Command> => vec![<>],
+  <a:Args> <b:OptBlockArg> => {
+    match b { Some(b) => { a.push(b); }, _ => {} }; a
+  },
+  <h:Assocs> <b:OptBlockArg> =>
+    match b { None => vec![p.new_hash(h)], Some(b) => vec![p.new_hash(h), b] },
+  <a:Args> Comma <h:Assocs> <b:OptBlockArg> => {
+    a.push(p.new_hash(h));
+    match b { Some(b) => { a.push(b); }, _ => {} };
+    a
+  },
+  <BlockArg> => vec![<>],
+};
+
+CommandArgs: Vec<NodeRef> = {
+  // $<stack>$ = p.cmdarg_stack;
+  // CMDARG_PUSH(1);
+  CallArgs
+  // p.cmdarg_stack = $<stack>1;
+};
+
+BlockArg: NodeRef = { "amper" <Arg> => p.new_block_arg(<>) };
+
+OptBlockArg: OptNodeRef = {
+  Comma <BlockArg> => Some(<>),
+  None => None,
+};
+
+Comma: () = {
+  "," => (),
+  "," HeredocBodies => (),
+};
+
+Args: Vec<NodeRef> = {
+  <Arg> => {
+    p.void_expr_error(<>);
+    vec![<>]
+  },
+  "star" <Arg> => {
+    p.void_expr_error(<>);
+    vec![p.new_splat(<>)]
+  },
+  <l:Args> Comma <a:Arg> => {
+    p.void_expr_error(a);
+    l.push(a); l
+  },
+  <l:Args> Comma "star" <a:Arg> => {
+    p.void_expr_error(a);
+    l.push(p.new_splat(a)); l
+  },
+};
+
+Mrhs: Vec<NodeRef> = {
+  <l:Args> Comma <a:Arg> => {
+    p.void_expr_error(a);
+    l.push(a); l
+  },
+  <l:Args> Comma "star" <a:Arg> => {
+    p.void_expr_error(a);
+    l.push(a); l
+  },
+  "star" <Arg> => {
+    p.void_expr_error(<>);
+    vec![<>]
+  },
+};
+
+Primary: NodeRef = {
+  Literal, String, Xstring, Regexp, Heredoc, VarRef, Backref,
+  <"fid"> => p.new_fcall(<>, vec![]),
+  "begin" // $<stack>$ = p.cmdarg_stack; p.cmdarg_stack = 0;
+    <Bodystmt>
+    "end" => <>, // p.cmdarg_stack = $<stack>2;
+  "lparen_arg" // $<stck>$ = p.cmdarg_stack; p.cmdarg_stack = 0;
+    <Stmt> // p.lstate = LexerState::ENDARG;
+    Rparen => <>, // p.cmdarg_stack = $<stack>2;
+  "lparen_arg" // p.lstate = LexerState::ENDARG;
+    Rparen => p.new_nil(),
+  "lparen" <Compstmt> "}" => <>,
+  <prim:PrimaryValue> "colon2" <id:"const"> => p.new_colon2(prim, id),
+  "colon3" <"const"> => p.new_colo3(<>),
+  "lbrack" <ArefArgs> "]" => p.new_array(<>),
+  "return" => p.new_return(vec![]),
+  "yield" <OptParenArgs> => p.new_yield(<>),
+  "not" "(" <expr> Rparen => p.call_uni_op(p.cond(<>), "!"),
+  "not" "(" Rparen => p.call_uni_op(p.new_nil(), "!"),
+  <op:Operation> <b:BraceBlock> => p.new_fcall(op, b),
+  MethodCall,
+  <m:MethodCall> <b:BraceBlock> => { p.call_with_block(m, b); m },
+  "lambda" // p.local_nest(); $<num>$ = p->lpar_beg; p.lpar_beg = ++p->paren_nest;
+    <a:FLarglist> // $<stack>$ = p.cmdarg_stack; p.cmdarg_stack = 0;
+    <b:LambdaBody> => {
+      // p.lpar_beg = $<num>2;
+      p.new_lambda(a, b)
+      // p.local_unnest(); p.cmdarg_stack = $<stack>4; CMDARG_LEXPOP();
+    },
+  "if" <c:ExprValue> Then
+    <s:Compstmt>
+    <t:IfTail>
+    "end" => p.new_if(p.cond(c), s, t),
+  "unless" <c:ExprValue> Then
+    <s:Compstmt>
+    <e:OptElse>
+    "end" => p.new_unless(p.cond(c), s, e),
+  "while" // COND_PUSH(1);
+    <c:ExprValue> Do // COND_POP();
+    <s:Compstmt>
+    <e:OptElse>
+    "end" => p.new_while(p.cond(c), s, e),
+  "until" // COND_PUSH(1);
+    <c:ExprValue> Do // COND_POP();
+    <s:Compstmt>
+    <e:OptElse>
+    "end" => p.new_until(p.cond(c), s, e),
+  "case" <c:ExprValue> OptTerms
+    <b:CaseBody>
+    "end" => p.new_case(Some(c), b),
+  "case" OptTerms
+    <b:CaseBody>
+    "end" => p.new_case(None(c), b),
+  "for" <v:ForVar> "in" // COND_PUSH(1);
+    <e:ExprValue> Do // COND_POP();
+    <s:Compstmt>
+    "end" => p.new_for(v, e, s),
+  "class" <c:Cpath> <s:Superclass>
+  // if p.in_def || p.in_single
+  //   return Err("class definition in method body");
+  // $<nd>$ = p.local_switch();
+    <b:Bodystmt>
+    "end" => {
+      let ret = p.new_class(c, s, b);
+      // p.local_resume($<nd>4);
+      ret
+    },
+  "class" << <c:Expr> // $<num>$ = p.in_def; p.in_def = 0;
+    Term // $<nd>$ = cons(local_switch(p), nint(p.in_single)); p.in_single = 0;
+    <s:Bodystmt>
+    "end" => {
+      let ret = p.new_sclass(c, s);
+      // p.local_resume(p, $<nd>6->car);
+      // p.in_def = $<num>4;
+      // p.in_single = intn($<nd>6->cdr);
+      ret
+    },
+  "module" <c:Cpath>
+  // if p.in_def || p.in_single
+  //   return Err("module definition in method body");
+  // $<nd>$ = p.local_switch();
+    <b:Bodystmt>
+    "end" => {
+      let ret = p.new_module(c, b);
+      // p.local_resume($<nd>3);
+      ret
+    },
+  "def" <f:Fname> // $<stack>$ = p.cmdarg_stack; p.cmdarg_stack = 0;
+  // p.in_def++; $<nd>$ p.local_switch();
+    <a:FArglist>
+    <b:Bodystmt>
+    "end" => {
+      let ret = p.new_def(f, a, b);
+      // p.local_resume(p, $<nd>4);
+      // p.in_def--;
+      // p.cmdarg_stack = $<stack>3;
+      ret
+    },
+  "break" => p.new_break(vec![]),
+  "next" => p.new_next(vec![]),
+  "redo" => p.new_redo(),
+  "retry" => p.new_retry(),
+};
+
+PrimaryValue: NodeRef = { Primary };
+
+Then: () = { Term, "then", Term "then" };
+
+Do: () = { Term, "do_cond" };
+
+IfTail: OptNodeRef = {
+  OptElse,
+  "elsif" <c:ExprValue> Then
+    <s:Compstmt>
+    <t:IfTail> => Some(p.new_if(p.cond(c), s, t)),
+};
+
+OptElse: OptNodeRef = {
+  None,
+  "else" <Compstmt> => Some(<>)
+};
+
+ForVar: Vec<NodeRef> = { <Lhs> => vec![<>], Mlhs };
+
+FMarg: NodeRef = {
+  <FNormArg> => p.new_arg(<>),
+  "lparen" <FMargs> Rparen => p.new_masgn(<>, vec![]),
+};
+
+FMargList: Vec<NodeRef> = {
+  <FMarg> => vec![<>],
+  <l:FMargList> "," <a:FMarg> => { l.push(a); l },
+};
+
+FMargs: (Vec<NodeRef>, Some(Some(NodeRef)), Vec<NodeRef>) = {
+  <FMargList> => (<>, None, vec![]),
+  <l:FMargList> "," "star" <r:FNormArg> => (l, Some(Some(r)), vec![]),
+  <l:FMargList> "," "star" <r:FNormArg> "," <p:FMargList> => (l, Some(Some(r)), p),
+  <l:FMargList> "," "star" => (l, Some(None), vec![]),
+  <l:FMargList> "," "star" "," <p:FMargList> => (l, Some(None), p),
+  "star" <FNormArg> => (vec![], Some(<>), vec![]),
+  "star" <r:FNormArg> "," <p:FMargList> => (vec![], Some(Some(r)), p),
+  "star" => (vec![], Some(None), vec![]),
+  "star" "," <p:FMargList> => (vec![], Some(None), p),
+};
+
+BlockParam: NodeRef = {
+  <pre:FArg> "," <o:FBlockOptarg> "," <r:FRestArg> <b:OptFBlockArg> =>
+    p.new_args(pre, o, r, vec![], b),
+  <pre:FArg> "," <o:FBlockOptarg> "," <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(pre, o, r, post, b),
+  <pre:FArg> "," <o:FBlockOptarg> <b:OptFBlockArg> =>
+    p.new_args(pre, o, None, vec![], b),
+  <pre:FArg> "," <o:FBlockOptarg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(pre, o, None, post, b),
+  <pre:FArg> "," <r:FRestArg> <b:OptFBlockArg> =>
+    p.new_args(pre, vec![], r, vec![], b),
+  <pre:FArg> "," => p.new_args(pre, vec![], None, vec![], None),
+  <pre:FArg> "," <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(pre, vec![], r, vec![] b),
+  <o:FBlockOptarg> "," <r:FRestArg> <b:OptFBlockArg> =>
+    p.new_args(vec![], o, r, vec![], b),
+  <o:FBlockOptarg> "," <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(vec![], o, r, post, b),
+  <o:FBlockOptarg> <b:OptFBlockArg> =>
+    p.new_args(vec![], o, None, vec![], b),
+  <o:FBlockOptarg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(vec![], o, None, post, b),
+  <r:FRestArg> <b:OptFBlockArg> =>
+    p.new_args(vec![], vec![], None, vec![], b),
+  <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(vec![], vec![], r, post, b),
+  <b:FBlockArg> => p.new_args(vec![], vec![], None, vec![], Some(b)),
+};
+
+OptBlockParam: OptNodeRef = {
+  None => None,
+  <BlockParamDef> => {
+    p.cmd_start = TRUE;
+    <>
+  },
+};
+
+BlockParamDef: NodeRef = {
+  "|" OptBvDecl "|" => None,
+  "||" => None,
+  "|" <BlockParam> OptBvDecl "|" => Some(<>),
+};
+
+OptBvDecl: () = { OptNl, OptNl ";" BvDecls OptNl };
+
+BvDecls: () = { Bvar, BvDecls "," Bvar };
+
+Bvar: () = {
+  <"ident"> => {
+    p.local_add_f(<>);
+    p.new_bv(<>);
+  },
+  FBadArg,
+};
+
+FLarglist: Vec<NodeRef> = {
+  "(" <FArgs> OptBvDecl ")" => <>,
+  FArgs,
+};
+
+LambdaBody: NodeRef = {
+  "lambeg" <Compstmt> "}" => <>,
+  "do_LAMBDA" <Compstmt> "end" => <>,
+};
+
+DoBlock: NodeRef = {
+  "do_block" // p.local_nest();
+    <o:OptBlockParam>
+    <s:Compstmt>
+    "end" => {
+      let ret = p.new_block(o, s);
+      p.local_unnest();
+      ret
+    },
+};
+
+BlockCall: NodeRef = {
+  <c:Command> <b:DoBlock> => {
+    if (c.nd_type() == NodeType::YIELD) {
+      return Err("block given to yield");
+    }
+    p.call_with_block(c, b)
+  },
+  <b:BlockCall> <c_op:CallOp2> <op:Operatio2> <a:OptParenArgs> =>
+    p.new_call(b, op, a, c_op),
+  <b:BlockCall> <c_op:CallOp2> <op:Operatio2> <a:OptParenArgs> <br:BraceBlock> =>
+    p.call_with_block(p.new_call(b, op, a, c_op), br),
+  <b:BlockCall> <c_op:CallOp2> <op:Operation2> <a:CommandArgs> <d:DoBlock> =>
+    p.call_with_block(p.new_call(b, op, a, c_op), d),
+};
+
+MethodCall: NodeRef = {
+  <op:Operation> <a:ParenArgs> => p.new_fcall(op, a),
+  <prim:PrimaryValue> <c_op:CallOp> <op:Operation2> <a:OptParenArgs> =>
+    p.new_call(prim, op, a, c_op),
+  <prim:PrimaryValue> "colon2" <op:Operation2> <a:ParenArgs> =>
+    p.new_call(prim, op, a, "::"),
+  <prim:PrimaryValue> "colon2" <op:Operation3> =>
+    p.new_call(prim, op, vec![], "::"),
+  <prim:PrimaryValue> <c_op:CallOp> <a:ParenArgs> =>
+    p.new_call(prim, Symbol::from("call"), a, c_op),
+  <prim:PrimaryValue> "colon2" <a:ParenArgs> =>
+    p.new_call(prim, Symbol::from("call"), a, "::"),
+  "super" <ParenArgs> => p.new_super(<>),
+  "super" => p.new_zsuper(),
+  <prim:PrimaryValue> "[" <a:OptCallArgs> Rbracket =>
+    p.new_call(prim, Symbol::from("[]"), a, "."),
+};
+
+BraceBlock: NodeRef = {
+  "{" // p.local_nest(); $<num>$ = p.lineno;
+    <param:OptBlockParam>
+    <s:Compstmt> "}" => {
+      let ret = p.new_block(param, s);
+      p.local_unnest();
+      ret
+    },
+  "do" // p.local_nest(); $<num>$ = p.lineno;
+    <param:OptBlockParam>
+    <s:Compstmt>
+    "end" => {
+      let ret = p.new_block(param, s);
+      p.local_unnest();
+      ret;
+    },
+};
+
+CaseBody: (OptNodeRef, NodeRef, OptNodeRef) = {
+  "when" <a:Args> Then
+    <s:Compstmt>
+    <c:Cases> => (Some(a), s, Some(c))
+};
+
+Cases: (OptNodeRef, NodeRef, OptNodeRef) = {
+  <OptElse> => (None, s, None),
+  <CaseBody> => <>,
+}
+
+OptRescue: Option<(Vec<NodeRef>, OptNodeRef, NodeRef, OptNodeRef)> = {
+  "rescue" <l:ExcList> <v:ExcVar> Then
+    <s:Compstmt>
+    <r:OptRescue> => (l, v, s, r),
+  None => None,
+};
+
+ExcList: Vec<NodeRef> = {
+  <Arg> => vec![<>],
+  Mrhs,
+  None, => vec![],
+};
+
+ExcVar: OptNodeRef = {
+  "assoc" <Lhs> => Some(<>),
+  None => None,
+};
+
+OptEnsure: OptNodeRef = {
+  "ensure" <Compstmt> => Some(<>),
+  None => None,
+};
+
+Literal: NodeRef = { Numeric, Symbol, Words, Symbols, };
+
+String: NodeRef = {
+  "char", "string",
+  "string_beg" <"string"> => <>,
+  "string_beg" <r:StringRep> <s:"string"> => {
+    r.push(s);
+    p.new_dstr(r)
+  },
+};
+
+StringRep: Vec<NodeRef> = {
+  StringInterp,
+  <r:StringRep> <s:StringInterp> => { r.append(s); r },
+};
+
+StringInterp: Vec<NodeRef> = {
+  <"string_mid"> => vec![<>],
+  <part:"string_part"> // $<nd>$ = p.lex_strterm; p.lex_strterm = None;
+    <s:Compstmt> "}" => {
+      p.lex_strterm = $<nd>2;
+      vec![part, s],
+    },
+  "literal_delim" => vec![p.new_literal_delim()],
+  "hd_literal_delim"  HeredocBodies => vec![p.new_literal_delim()],
+};
+
+Xstring: NodeRef = {
+  "xstring_beg" <"xstring"> => <>,
+  "xstring_beg" <r:StringRep> <s:"xstring"> => {
+    r.push(s);
+    p.new_dxstr(r)
+  },
+};
+
+Regexp: NodeRef = {
+  "regexp_beg" <"regexp"> => <>,
+  "regexp_beg" <r:StringRep> <rgx:"regexp"> => p.new_dregx(r, rgx),
+};
+
+Heredoc: () = { "heredoc_beg" };
+
+HeredocBodies: () = {
+  HeredocBody,
+  HeredocBodies HeredocBody => (),
+};
+
+HeredocBody: () => {
+  "heredoc_end" => {
+    let inf = p.parsing_hereodc_inf();
+    inf.doc.push(p.new_str(""));
+    p.heredoc_end();
+  },
+  HeredocStringRep "heredoc_end" => { p.heredoc_end(); },
+};
+
+HeredocStringRep: () = {
+  HeredocStringInterp,
+  HeredocStringRep HeredocStringInterp
+};
+
+HeredocStringInterp: () = {
+  
+};
