@@ -859,5 +859,90 @@ HeredocStringRep: () = {
 };
 
 HeredocStringInterp: () = {
-  
+  <"hd_string_mid"> => {
+    let inf = p.parsing_heredoc_inf();
+    inf.doc.push(p.new_str(<>));
+    p.herdoc_treat_nextline();
+  },
+  <s:"hd_start_part"> // $<nd>$ = p.lex_strterm; p.lex_strterm = NULL;
+    <c:Compstmt> "}" => {
+      let inf = p.parsing_heredoc_inf();
+      p.lex_strterm = $<nd>2;
+      inf.doc.push(s);
+      inf.doc.push(c);
+    },
+};
+
+Words: NodeRef = {
+  "words_beg" <"string"> => { p.new_words(vec![<>]) },
+  "words_beg" <r:StringRep> <s:"string"> => {
+    r.push(s);  p,new_words(r)
+  },
+};
+
+Symbol: NodeRef = {
+  <BasicSymbol> => p.new_sym(<>),
+  "symbeg" "string_beg" <r:StringRep> <s:"string"> => {
+    p.lstate = LexerState::END;
+    r.push(s);
+    p.new_dsym(r)
+  },
+};
+
+BasicSymbol: Symbol = {
+  "symbeg" <Sym> => { p.lstate = LexerState::END; <> },
+};
+
+Sym: Symbol = {
+  Fname, "ivar", "gvar", "cvar",
+  <"string"> => Symbol::from(<>),
+  "string_beg" <"string"> => Symbol::from(<>),
+};
+
+Symbols: NodeRef = {
+  "symbols_beg" <"string"> => p.new_symbols(vec![<>]),
+  "symbols_beg" <r:StringRep> <s:"string"> => {
+    r.push(s);
+    p.new_symbols(r)
+  },
+};
+
+Numeric: NodeRef = {
+  "integer",
+  "float",
+  "uminus_num" <"integer"> // %prec "lowest"
+    => p.negate_lit(<>),
+  "uminus_num" <"float"> // %prec "lowest"
+    => p.negate_lit(<>),
+};
+
+Variable: NodeRef = {
+  <"identifier"> => p.new_lvar(<>),
+  <"ivar"> => p.new_lvar(<>),
+  <"gvar"> => p.new_lvar(<>),
+  <"cvar"> => p.new_lvar(<>),
+  <"const"> => p.new_const(<>),
+};
+
+VarLhs: NodeRef = { <Variable> => p.assignable(<>) };
+
+VarRef: NodeRef = {
+  <Variable> => p.var_reference(<>),
+  "nil" => p.new_nil(),
+  "self" => p.new_self(),
+  "true" => p.new_true(),
+  "false" => p.new_false(),
+  <"__FILE__"> => p.new_str(<>),
+  <"__LINE__"> => p.new_int(<>),
+};
+
+Backref: NodeRef = { "nth_ref", "back_ref", };
+
+Superclass: OptNodeRef = {
+  Term => None,
+  SuperclassSymbol <ExerValue> Term => <>,
+};
+
+SuperclassSymbol: () = {
+  "<" => { p.lstate = LexerState::BEG; p.cmd_start = true; }
 };
