@@ -405,11 +405,11 @@ ArgsRhs: NodeRef = {
   },
 };
 
-ParenArgs: Vec<NodeRef> => {
+ParenArgs: Vec<NodeRef> = {
   "(" <OptCallArgs> Rparen => <>,
 };
 
-OptParenArgs: Vec<NodeRef> => {
+OptParenArgs: Vec<NodeRef> = {
   None => vec![],
   ParenArgs,
 };
