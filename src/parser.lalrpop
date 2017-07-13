@@ -54,7 +54,7 @@ extern {
   }
 }
 
-Program: NodeRef = { <t:Topstmt> OptTerms => t };
+Program: NodeRef = { <TopStmt> OptTerms => <> };
 
 TopStmts: BeginNodeRef = {
   None => p.new_begin(None),
@@ -397,7 +397,7 @@ ArefArgs: Vec<NodeRef> = {
 };
 
 ArgsRhs: NodeRef = {
-  <a:Arg>, // %prec "op_asgn"
+  Arg, // %prec "op_asgn"
   <a:Arg> "mod_rescue" <r:Arg> => {
     p.void_expr_error(a);
     p.void_expr_error(r);
@@ -557,7 +557,7 @@ Primary: NodeRef = {
       // p.local_resume($<nd>4);
       ret
     },
-  "class" << <c:Expr> // $<num>$ = p.in_def; p.in_def = 0;
+  "class" "<<" <c:Expr> // $<num>$ = p.in_def; p.in_def = 0;
     Term // $<nd>$ = cons(local_switch(p), nint(p.in_single)); p.in_single = 0;
     <s:Bodystmt>
     "end" => {
@@ -624,7 +624,7 @@ FMargList: Vec<NodeRef> = {
   <l:FMargList> "," <a:FMarg> => { l.push(a); l },
 };
 
-FMargs: (Vec<NodeRef>, Some(Some(NodeRef)), Vec<NodeRef>) = {
+FMargs: (Vec<NodeRef>, Option<Option<NodeRef>>, Vec<NodeRef>) = {
   <FMargList> => (<>, None, vec![]),
   <l:FMargList> "," "star" <r:FNormArg> => (l, Some(Some(r)), vec![]),
   <l:FMargList> "," "star" <r:FNormArg> "," <p:FMargList> => (l, Some(Some(r)), p),
@@ -772,7 +772,7 @@ CaseBody: (OptNodeRef, NodeRef, OptNodeRef) = {
 Cases: (OptNodeRef, NodeRef, OptNodeRef) = {
   <OptElse> => (None, s, None),
   <CaseBody> => <>,
-}
+};
 
 OptRescue: Option<(Vec<NodeRef>, OptNodeRef, NodeRef, OptNodeRef)> = {
   "rescue" <l:ExcList> <v:ExcVar> Then
@@ -844,7 +844,7 @@ HeredocBodies: () = {
   HeredocBodies HeredocBody => (),
 };
 
-HeredocBody: () => {
+HeredocBody: () = {
   "heredoc_end" => {
     let inf = p.parsing_hereodc_inf();
     inf.doc.push(p.new_str(""));
@@ -946,3 +946,201 @@ Superclass: OptNodeRef = {
 SuperclassSymbol: () = {
   "<" => { p.lstate = LexerState::BEG; p.cmd_start = true; }
 };
+
+FArglist: NodeRef = {
+  "(" <FArgs> Rparen => {
+    p.lstate = LexerState::BEG;
+    p.cmd_start = true;
+    <>
+  },
+  <FArgs> Term => <>,
+};
+
+FArgs: NodeRef = {
+  <pre:FArg> "," <o:FOptarg> "," <r:FRestArg> <b:OptFBlockArg> =>
+    p.new_args(pre, o, Some(r), vec![], b),
+  <pre:FArg> "," <o:FOptarg> "," <r:FRestArg> <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(pre, o, Some(r), post, b),
+  <pre:FArg> "," <o:FOptarg> <b:OptFBlockArg> =>
+    p.new_args(pre, o, None, vec![], b),
+  <pre:FArg> "," <o:FOptarg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(pre, o, None, post, b),
+  <pre:FArg> "," <r:FRestArg> <b:OptFBlockArg> =>
+    p.new_args(pre, vec![], Some(r), vec![], b),
+  <pre:FArg> "," <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(pre, vec![], Some(r), post, b),
+  <pre:FArg> <b:OptFBlockArg> => p.new_args(pre, vec![], None, vec![], b),
+  <o:FOptarg> "," <r:FRestArg> <b:OptFBlockArg> =>
+    p.new_args(vec![], o, Some(r), vec![], b),
+  <o:FOptarg> "," <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(vec![], o, Some(r), post, b),
+  <o:FOptarg> <b:OptFBlockArg> => p.new_args(vec![], o, None, vec![], b),
+  <o:FOptarg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(vec![], o, None, post, b),
+  <r:FRestArg> <b:OptFBlockArg> => p.new_args(vec![], vec![], Some(r), vec![], b),
+  <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
+    p.new_args(vec![], vec![], Some(r), post, b),
+  <FBlockArg> => p.new_args(vec![], vec![], None, vec![], b),
+  None => {
+    p.local_add_f(None);
+    p.new_args(vec![], vec![], None, vec![], None)
+  },
+};
+
+FBadArg: () = {
+  "const" => Err("formal argument cannot be a constant"),
+  "ivar" => Err("formal argument cannot be a instace variable"),
+  "gvar" => Err("formal argument cannot be a global variable"),
+  "cvar" => Err("formal argument cannot be a class variable"),
+};
+
+FNormArg: Symbol = {
+  FBadArg,
+  <"identifier"> => {
+    p.local_add_f(<>);
+    <>
+  },
+};
+
+FArgItem: NodeRef = {
+  <FNormArg> => p.new_arg(<>),
+  "lparen" <FMargs> Rparen => p.new_masgn(<>, None),
+};
+
+FArg: Vec<NodeRef> = {
+  <FArgItem> => vec![<>],
+  <l:FArgItem> "," <a:FArgItem> => { l.push(a); l },
+};
+
+FOptAsgn: Symbol = {
+  <"ident"> "=" => { p.local_add_f(<>); <> },
+};
+
+FOpt: (Symbol, NodeRef) = {
+  <o:FOptAsgn> <a:Arg> => {
+    p.void_expr_error(a);
+    (o, a)
+  },
+};
+
+FBlockOpt: (Symbol, NodeRef) = {
+  <o:FOptAsgn> <v:PrimaryValue> => {
+    p.void_expr_error(v);
+    (o, v)
+  },
+};
+
+FBlockOptArg: Vec<(Symbol, NodeRef)> = {
+  <FBlockOpt> => vec![<>],
+  <l:FBlockOptarg> "," <b:FBlockOpt> => { l.push(b); l },
+};
+
+FOptarg: Vec<(Symbol, NodeRef)> = {
+  <FOpt> => vec![<>],
+  <l:FOptarg> "," <o:FOpt> => { l.push(o); l }
+};
+
+RestargMark: () = { "*", "star" };
+
+FRestArg: Option<Symbol> = {
+  RestargMark <"ident"> => { p.local_add_f(<>); Some(<>) },
+  RestargMark => { p.local_add_f(Symbol::from("*")); None },
+};
+
+BlkargMark: () = { "&", "amper" };
+
+FBlockArg: Symbol = {
+  BlkargMark <"ident"> => { p.local_add_f(<>); <> }
+};
+
+OptFBlockArg: Option<Symbol> = {
+  "," <FBlockArg> => <>,
+  None => { p.local_add_f(Symbol::from("&")); None },
+};
+
+Singleton: NodeRef = {
+  VarRef,
+  SingletonParen <Expr> Rparen => match <>.node_type() => {
+    NodeType::STR | NodeType::DXSTR | NodeType::XSTR | NodeType::DXSTR |
+    NodeType::DREGX | NodeType::MATCH | NodeType::FLOAT | NodeType::ARRAY |
+    NodeType::HEREDOR =>
+      Err("Can't define singleton method of literals."),
+    _ => <>,
+  },
+};
+
+SingletonParen: () = { "(" => { p.lstate = LexerState::BEG; } };
+
+AssocList: Vec<NodeRef> = {
+  None => vec![],
+  <Assocs> Trailer => <>,
+};
+
+Assocs: Vec<(NodeRef, NodeRef)> = {
+  <Assoc> => vec![<>],
+  <l:Assocs> "," <a:Assoc> => { l.push(a); l },
+};
+
+Assoc: NodeRef = {
+  <k:Arg> "assoc" <v:Arg> => {
+    p.void_expr_error(k);
+    p.void_expr_error(v);
+    (k, v)
+  },
+  <k:"label"> <v:Arg> => {
+    p.void_expr_error(v);
+    (p.new_sym(k), v)
+  },
+  <k:"label_end"> <v:Arg> => {
+    p.void_expr_error(v);
+    (p.new_sym(k), v)
+  },
+  "string_beg" <k:"label_end"> <v:Arg> => {
+    p.void_expr_error(v);
+    (p.new_sym(k), v)
+  },
+  "string_beg" <s:StringRep> <l:"label_end"> <v:Arg> => {
+    p.void_expr_error(v);
+    s.push(l);
+    (p.new_dsym(s), v)
+  },
+};
+
+Operation: Symbol = { "ident", "const", "fid" };
+Operation2: Symbol = { "ident", "const", "fid", Op };
+Operation3: Symbol = { "ident", "fid", Op };
+
+DotOrColon: () = { ".", "colon2" };
+
+CallOp: Symbol = {
+  "." => Symbol::from("."),
+  "&." => Symbol::from("&."),
+};
+
+CallOp2: Symbol = { CallOp, "colon2" };
+
+OptTerms: () = {
+  None,
+  Terms
+};
+OptNl: () = {
+  None,
+  Nl
+};
+
+Rparen: () = { OptNl ")" };
+Rbracket: () = {OptNl "]" };
+
+Trailer: () = { None, Nl, Comma };
+
+Term: () = {
+  ";", // => { yyerrtok; }
+  Nl,
+  HeredocBody,
+};
+
+Nl: () = { "\n" => { p.lineno++; p.column = 0; } };
+
+Terms: () = { Term, Terms Term };
+
+None: () = {};
