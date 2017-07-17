@@ -22,6 +22,80 @@ extern {
     "}" => Tok::Char('}'),
     "=" => Tok::Char('='),
     "!" => Tok::Char('!'),
+    "[" => Tok::Char('['),
+    "]" => Tok::Char(']'),
+    "," => Tok::Char(','),
+    "|" => Tok::Char('|'),
+    "^" => Tok::Char('^'),
+    "&" => Tok::Char('&'),
+    "<=>" => Tok::Cmp,
+    "==" => Tok::Eq,
+    "===" => Tok::Eqq,
+    "=~" => Tok::Match,
+    "!~" => Tok::NMatch,
+    ">" => Tok::Char('>'),
+    ">=" => Tok::GEq,
+    "<" => Tok::Char('<'),
+    "<=" => Tok::LEq,
+    "!=" => Tok::NEq,
+    "<<" => Tok::LShift,
+    ">>" => Tok::RShift,
+    "+" => Tok::Char('+'),
+    "-" => Tok::Char('-'),
+    "*" => Tok::Char('*'),
+    "/" => Tok::Char('/'),
+    "%" => Tok::Char('%'),
+    "**" => Tok::Pow,
+    "~" => Tok::Char('~'),
+    "+@" => Tok::UPlus,
+    "-@" => Tok::UMinus,
+    "[]" => Tok::ARef,
+    "[]=" => Tok::ASet,
+    "`" => Tok::Char('`'),
+    "&&" => Tok::AndOp,
+    "||" => Tok::OrOp,
+    "?" => Tok::Char('?'),
+    ":" => Tok::Char(':'),
+    "(" => Tok::Char('('),
+    ")" => Tok::Char(')'),
+    "amper" => Tok::Amper,
+    "lparen_arg" => Tok::LparenArg,
+    "lbrack" => Tok::Lbrack,
+    "->" => Tok::Lambda,
+    ";" => Tok::Char(';'),
+    "=>" => Tok::Assoc,
+    "." => Tok::Char('.'),
+    "&." => Tok::AndDot,
+    "\n" => Tok::NewLine,
+
+    "lambeg" => Tok::Lambeg,
+
+    "char" => Tok::Char(<String>),
+    "string" => Tok::String(<String>),
+    "string_beg" => Tok::StringBeg,
+    "string_mid" => Tok::StringMid(<Symbol>),
+    "string_part" => Tok::StringPart(<String>),
+    "literal_delim" => Tok::LiteralDelim,
+    "hd_literal_delim" => Tok::HdLiteralDelim,
+    "xstring_beg" => Tok::XStringBeg,
+    "xstring" => Tok::XString(<String>),
+    "regexp_beg" => Tok::RegexpBeg,
+    "regexp" => Tok::Regexp(<String>),
+    "heredoc_beg" => Tok::HeredocBeg,
+    "heredoc_end" => Tok::HeredocEnd,
+    "hd_string_mid" => Tok::HdStringMid(<String>),
+    "hd_start_part" => Tok::HdStartPart(<String>),
+    "words_beg" => Tok::WordsBeg,
+    "symbeg" => Tok::SymBeg,
+    "symbols_beg" => Tok::SymbolsBeg,
+    "label_end" => Tok::LabelEnd(<Symbol>),
+
+    "nth_ref" => Tok::NthRef,
+    "back_ref" => Tok::BackRef,
+
+    "__LINE__" => Tok::Line,
+    "__FILE__" => Tok::File,
+    "__ENCODING__" => Tok::Encoding,
 
     "op_asgn" => Tok::op_asgn(<Symbol>),
     "ident" => Tok::Ident(<Symbol>),
@@ -32,7 +106,16 @@ extern {
     "cvar" => Tok::CVar(<Symbol>),
     "label" => Tok::Label(<Symbol>),
 
+    "uminus_num" => Tok::UMinusNum(u32),
+    "uplus" => Tok::UPlus,
+    "uminus" => Tok::UMinus,
+    "integer" => Tok::Integer(u32),
+    "float" => Tok::Float(float),
+
     "colon2" => Tok::Colon2,
+    "colon3" => Tok::Colon3,
+    ".." => Tok::Dot2,
+    "..." => Tok::Dot3,
 
     "mod_if" => Tok::ModifierIf,
     "mod_unless" => Tok::ModifierUnless,
@@ -48,24 +131,56 @@ extern {
     "return" => Tok::Return,
     "break" => Tok::Break,
     "next" => Tok::Next,
+    "begin" => Tok::Begin,
+    "case" => Tok::Case,
+    "class" => Tok::Class,
+    "def" => Tok::Def,
+    "do" => Tok::Do,
+    "do_cond" => Tok::DoCond,
+    "do_LAMBDA" => Tok::DoLambda,
+    "do_block" => Tok::DoBlock,
+    "else" => Tok::Else,
+    "elsif" => Tok::Elsif,
+    "end" => Tok::End,
+    "ensure" => Tok::Ensure,
+    "false" => Tok::False,
+    "for" => Tok::For,
+    "in" => Tok::In,
+    "module" => Tok::Module,
+    "nil" => Tok::Nil,
+    "redo" => Tok::Redo,
+    "rescue" => Tok::Rescue,
+    "retry" => Tok::REtry,
+    "self" => Tok::Self,
+    "then" => Tok::Then,
+    "true" => Tok::True,
+    "undef" => Tok::Undef,
+    "when" => Tok::When,
+    "if" => Tok::If,
+    "unless" => Tok::Unless,
+    "while" => Tok::While,
+    "until" => Tok::Until,
 
     "lbrace_arg" => Tok::LbraceArg,
     "star" => Tok::Star,
+    "lparen" => Tok::Lparen,
   }
 }
 
-Program: NodeRef = { <TopStmt> OptTerms => <> };
+pub Program: NodeRef = { <TopStmt> OptTerms => <> };
+
+TopCompstmt: NodeRef = { <TopStmts> OptTerms => <> };
 
 TopStmts: BeginNodeRef = {
   None => p.new_begin(None),
   <t:TopStmt> => p.new_begin(Some(t)),
   <stmts:TopStmts> Terms <t:TopStmt> => { stmts.push(t); stmts },
-  Error <t:TopStmt> => p.new_begin(None),
+  ! <t:TopStmt> => p.new_begin(None),
 };
 
 TopStmt: NodeRef = {
   Stmt,
-  "BEGIN" "{" TopComstmt "}" => {
+  "BEGIN" "{" TopCompstmt "}" => {
     Err("BEGIN not supported")
   }
 };
@@ -81,8 +196,8 @@ Compstmt: Vec<NodeRef> = { <s:Stmts> OptTerms => s };
 Stmts: Vec<NodeRef> = {
   None => vec![],
   Stmt => vec![<>],
-  <res:Stmts> terms <s:Stmt> => { res.push(s); res },
-  Error <s:Stmt> => vec![s],
+  <res:Stmts> Terms <s:Stmt> => { res.push(s); res },
+  ! <s:Stmt> => vec![s],
 };
 
 Stmt: NodeRef = {
@@ -103,7 +218,7 @@ Stmt: NodeRef = {
 };
 
 AliasFsym: Symbol = {
-  fsym => { p.lstate = LexerState::FNAME; <> }
+  <Fsym> => { p.lstate = LexerState::FNAME; <> }
 };
 
 CommandAsgn: NodeRef = {
@@ -189,7 +304,7 @@ Mlhs: Vec<NodeRef> = {
   "lparen" <MlhsInner> Rparen => <>,
 };
 
-MlhsInnter: Vec<NodeRef> = {
+MlhsInner: Vec<NodeRef> = {
   MlhsBasic,
   "lparen" <MlhsInner> Rparen => <>,
 };
@@ -316,7 +431,7 @@ Op: Symbol = {
   "star" => Symbol::from("*"),
   "/" => Symbol::from("/"),
   "%" => Symbol::from("%"),
-  "pow" => Symbol::from("**"),
+  "**" => Symbol::from("**"),
   "!" => Symbol::from("!"),
   "~" => Symbol::from("~"),
   "+@" => Symbol::from("+@"),
@@ -352,17 +467,17 @@ Arg: NodeRef = {
   "colon3" <id:"const"> <op:"op_asgn"> <r:ArgRhs> =>
     Err("constant re-assignment"),
   <b:Backref> <op:"op_asgn"> <r:ArgRhs> => p.backref_error(b),
-  <l:Arg> "dot2" <r:Arg> => p.new_dot2(l, r),
-  <l:Arg> "dot3" <r:Arg> => p.new_dot3(l, r),
+  <l:Arg> ".." <r:Arg> => p.new_dot2(l, r),
+  <l:Arg> "..." <r:Arg> => p.new_dot3(l, r),
   <l:Arg> "+" <r:Arg> => p.call_bin_op(l, "+", r),
   <l:Arg> "-" <r:Arg> => p.call_bin_op(l, "-", r),
   <l:Arg> "*" <r:Arg> => p.call_bin_op(l, "*", r),
   <l:Arg> "/" <r:Arg> => p.call_bin_op(l, "/", r),
   <l:Arg> "%" <r:Arg> => p.call_bin_op(l, "%", r),
-  <l:Arg> "pow" <r:Arg> => p.call_bin_op(l, "**", r),
-  "uminus_num" <l:"integer"> "pow" <r:Arg> =>
+  <l:Arg> "**" <r:Arg> => p.call_bin_op(l, "**", r),
+  "uminus_num" <l:"integer"> "**" <r:Arg> =>
     p.call_uni_op(p.call_bin_op(l, "**", r), "-@"),
-  "uminus_num" <l:"float"> "pow" <r:Arg> =>
+  "uminus_num" <l:"float"> "**" <r:Arg> =>
     p.call_uni_op(p.call_bin_op(l, "**", r), "-@"),
   "uplus" <a:Arg> => p.call_uni_op(a, "+@"),
   "uminus" <a:Arg> => p.call_uni_op(a, "-@"),
@@ -407,6 +522,15 @@ ArgsRhs: NodeRef = {
 
 ParenArgs: Vec<NodeRef> = {
   "(" <OptCallArgs> Rparen => <>,
+};
+
+ArgRhs: NodeRef = {
+  Arg, // %prec "op_asgn"
+  <a:Arg> "mod_rescue" <r:Arg> => {
+    p.void_expr_error(a);
+    p.void_expr_error(r);
+    p.new_mod_rescue(a, r)
+  },
 };
 
 OptParenArgs: Vec<NodeRef> = {
@@ -507,12 +631,12 @@ Primary: NodeRef = {
   "lbrack" <ArefArgs> "]" => p.new_array(<>),
   "return" => p.new_return(vec![]),
   "yield" <OptParenArgs> => p.new_yield(<>),
-  "not" "(" <expr> Rparen => p.call_uni_op(p.cond(<>), "!"),
+  "not" "(" <Expr> Rparen => p.call_uni_op(p.cond(<>), "!"),
   "not" "(" Rparen => p.call_uni_op(p.new_nil(), "!"),
   <op:Operation> <b:BraceBlock> => p.new_fcall(op, b),
   MethodCall,
   <m:MethodCall> <b:BraceBlock> => { p.call_with_block(m, b); m },
-  "lambda" // p.local_nest(); $<num>$ = p->lpar_beg; p.lpar_beg = ++p->paren_nest;
+  "->" // p.local_nest(); $<num>$ = p->lpar_beg; p.lpar_beg = ++p->paren_nest;
     <a:FLarglist> // $<stack>$ = p.cmdarg_stack; p.cmdarg_stack = 0;
     <b:LambdaBody> => {
       // p.lpar_beg = $<num>2;
@@ -637,26 +761,26 @@ FMargs: (Vec<NodeRef>, Option<Option<NodeRef>>, Vec<NodeRef>) = {
 };
 
 BlockParam: NodeRef = {
-  <pre:FArg> "," <o:FBlockOptarg> "," <r:FRestArg> <b:OptFBlockArg> =>
+  <pre:FArg> "," <o:FBlockOptArg> "," <r:FRestArg> <b:OptFBlockArg> =>
     p.new_args(pre, o, r, vec![], b),
-  <pre:FArg> "," <o:FBlockOptarg> "," <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
+  <pre:FArg> "," <o:FBlockOptArg> "," <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
     p.new_args(pre, o, r, post, b),
-  <pre:FArg> "," <o:FBlockOptarg> <b:OptFBlockArg> =>
+  <pre:FArg> "," <o:FBlockOptArg> <b:OptFBlockArg> =>
     p.new_args(pre, o, None, vec![], b),
-  <pre:FArg> "," <o:FBlockOptarg> "," <post:FArg> <b:OptFBlockArg> =>
+  <pre:FArg> "," <o:FBlockOptArg> "," <post:FArg> <b:OptFBlockArg> =>
     p.new_args(pre, o, None, post, b),
   <pre:FArg> "," <r:FRestArg> <b:OptFBlockArg> =>
     p.new_args(pre, vec![], r, vec![], b),
   <pre:FArg> "," => p.new_args(pre, vec![], None, vec![], None),
   <pre:FArg> "," <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
     p.new_args(pre, vec![], r, vec![] b),
-  <o:FBlockOptarg> "," <r:FRestArg> <b:OptFBlockArg> =>
+  <o:FBlockOptArg> "," <r:FRestArg> <b:OptFBlockArg> =>
     p.new_args(vec![], o, r, vec![], b),
-  <o:FBlockOptarg> "," <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
+  <o:FBlockOptArg> "," <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
     p.new_args(vec![], o, r, post, b),
-  <o:FBlockOptarg> <b:OptFBlockArg> =>
+  <o:FBlockOptArg> <b:OptFBlockArg> =>
     p.new_args(vec![], o, None, vec![], b),
-  <o:FBlockOptarg> "," <post:FArg> <b:OptFBlockArg> =>
+  <o:FBlockOptArg> "," <post:FArg> <b:OptFBlockArg> =>
     p.new_args(vec![], o, None, post, b),
   <r:FRestArg> <b:OptFBlockArg> =>
     p.new_args(vec![], vec![], None, vec![], b),
@@ -719,9 +843,9 @@ BlockCall: NodeRef = {
     }
     p.call_with_block(c, b)
   },
-  <b:BlockCall> <c_op:CallOp2> <op:Operatio2> <a:OptParenArgs> =>
+  <b:BlockCall> <c_op:CallOp2> <op:Operation2> <a:OptParenArgs> =>
     p.new_call(b, op, a, c_op),
-  <b:BlockCall> <c_op:CallOp2> <op:Operatio2> <a:OptParenArgs> <br:BraceBlock> =>
+  <b:BlockCall> <c_op:CallOp2> <op:Operation2> <a:OptParenArgs> <br:BraceBlock> =>
     p.call_with_block(p.new_call(b, op, a, c_op), br),
   <b:BlockCall> <c_op:CallOp2> <op:Operation2> <a:CommandArgs> <d:DoBlock> =>
     p.call_with_block(p.new_call(b, op, a, c_op), d),
@@ -788,7 +912,7 @@ ExcList: Vec<NodeRef> = {
 };
 
 ExcVar: OptNodeRef = {
-  "assoc" <Lhs> => Some(<>),
+  "=>" <Lhs> => Some(<>),
   None => None,
 };
 
@@ -917,7 +1041,7 @@ Numeric: NodeRef = {
 };
 
 Variable: NodeRef = {
-  <"identifier"> => p.new_lvar(<>),
+  <"ident"> => p.new_lvar(<>),
   <"ivar"> => p.new_lvar(<>),
   <"gvar"> => p.new_lvar(<>),
   <"cvar"> => p.new_lvar(<>),
@@ -940,7 +1064,7 @@ Backref: NodeRef = { "nth_ref", "back_ref", };
 
 Superclass: OptNodeRef = {
   Term => None,
-  SuperclassSymbol <ExerValue> Term => <>,
+  SuperclassSymbol <ExprValue> Term => <>,
 };
 
 SuperclassSymbol: () = {
@@ -996,7 +1120,7 @@ FBadArg: () = {
 
 FNormArg: Symbol = {
   FBadArg,
-  <"identifier"> => {
+  <"ident"> => {
     p.local_add_f(<>);
     <>
   },
@@ -1032,7 +1156,7 @@ FBlockOpt: (Symbol, NodeRef) = {
 
 FBlockOptArg: Vec<(Symbol, NodeRef)> = {
   <FBlockOpt> => vec![<>],
-  <l:FBlockOptarg> "," <b:FBlockOpt> => { l.push(b); l },
+  <l:FBlockOptArg> "," <b:FBlockOpt> => { l.push(b); l },
 };
 
 FOptarg: Vec<(Symbol, NodeRef)> = {
@@ -1082,7 +1206,7 @@ Assocs: Vec<(NodeRef, NodeRef)> = {
 };
 
 Assoc: NodeRef = {
-  <k:Arg> "assoc" <v:Arg> => {
+  <k:Arg> "=>" <v:Arg> => {
     p.void_expr_error(k);
     p.void_expr_error(v);
     (k, v)
