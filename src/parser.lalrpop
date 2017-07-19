@@ -106,7 +106,7 @@ extern {
     "cvar" => Tok::CVar(<Symbol>),
     "label" => Tok::Label(<Symbol>),
 
-    "uminus_num" => Tok::UMinusNum(u32),
+    "uminus_num" => Tok::UMinusNum,
     "uplus" => Tok::UPlus,
     "uminus" => Tok::UMinus,
     "integer" => Tok::Integer(u32),
@@ -203,10 +203,10 @@ Stmts: Vec<NodeRef> = {
 Stmt: NodeRef = {
   "alias" <a:AliasFsym> <f:Fsym> => p.new_alias(a, f),
   "undef" <l:UndefList> => p.new_undef(l),
-  <s:Stmt> "mod_if" <e:ExprValue> => p.new_if(p.cond(e) s, None),
-  <s:Stmt> "mod_unless" <e:ExprValue> => p.new_unless(p.cond(e), s, None),
-  <s:Stmt> "mod_while" <e:ExprValue> => p.new_while(p.cond(e), s),
-  <s:Stmt> "mod_until" <e:ExprValue> => p.new_until(p.cond(e), s),
+  <s:Stmt> "mod_if" <e:Expr> => p.new_if(p.cond(e) s, None),
+  <s:Stmt> "mod_unless" <e:Expr> => p.new_unless(p.cond(e), s, None),
+  <s:Stmt> "mod_while" <e:Expr> => p.new_while(p.cond(e), s),
+  <s:Stmt> "mod_until" <e:Expr> => p.new_until(p.cond(e), s),
   <s:Stmt> "mod_rescue" <r:Stmt> => p.new_mod_rescue(s, r),
   "END" "{" <s:Compstmt> "}" => Err("END not supported"),
   CommandAsgn,
@@ -224,17 +224,15 @@ AliasFsym: Symbol = {
 CommandAsgn: NodeRef = {
   <l:Lhs> "=" <r:CommandRhs> => p.new_asgn(l, r),
   <l:VarLhs> <op:"op_asgn"> <r:CommandRhs> => p.new_op_asgn(l, op, r),
-  <prim:PrimaryValue> "[" <idx:OptCallArgs> Rbracket <op:"op_asgn"> <r:CommandRhs> =>
+  <prim:Primary> "[" <idx:OptCallArgs> Rbracket <op:"op_asgn"> <r:CommandRhs> =>
     p.new_op_asgn(p.new_call(prim, Symbol::from("[]"), idx, '.'), op, r),
-  <prim:PrimaryValue> <c:CallOp> <id:"ident"> <op:"op_asgn"> <r:CommandRhs> =>
+  <prim:Primary> <c:CallOp> <id:"ident"> <op:"op_asgn"> <r:CommandRhs> =>
     p.new_op_asgn(p.new_call(prim, id, vec![], c), op, r),
-  <prim:PrimaryValue> <c:CallOp> <id:"const"> <op:"op_asgn"> <r:CommandRhs> =>
+  <prim:Primary> <c:CallOp> <id:"const"> <op:"op_asgn"> <r:CommandRhs> =>
     p.new_op_asgn(p.new_call(prim, id, vec![], c), op, r),
-  <prim:PrimaryValue> "colon2" <id:"const"> <op:"op_asgn"> <r:CommandRhs> =>
-    p.new_op_asgn(p.new_call(prim, id, vec![], c), op, r),
-  <prim:PrimaryValue> "colon2" <id:"ident"> <op:"op_asgn"> <r:CommandCall> =>
+  Primary "colon2" "const" "op_asgn" CommandCall =>
     Err("constant re-assignment"),
-  <prim:PrimaryValue> "colon2" <id:"ident"> <op:"op_asgn"> <r:CommandRhs> =>
+  <prim:Primary> "colon2" <id:"ident"> <op:"op_asgn"> <r:CommandRhs> =>
     p.new_op_asgn(p.new_call(prim, id, vec![], Tok::colon2), op, r),
   <b:Backref> <op:"op_asgn"> CommandRhs => p.backref_error(b),
 };
@@ -250,11 +248,9 @@ Expr: NodeRef = {
   <l:Expr> "and" <r:Expr> => p.new_and(l, r),
   <l:Expr> "or" <r:Expr> => p.new_or(l, r),
   "not" OptNl <e:Expr> => p.call_uni_op(p.cond(e), "!"),
-  "!" <c:CommandCall> => p.call_uni_op(p.cond(e), "!"),
+  "!" <c:CommandCall> => p.call_uni_op(p.cond(c), "!"),
   Arg
 };
-
-ExprValue: NodeRef = { Expr };
 
 CommandCall: NodeRef = { Command, BlockCommand };
 
@@ -280,15 +276,15 @@ Command: NodeRef = {
     p.args_with_block(c, b);
     p.new_fcall(op, c)
   },
-  <prim:PrimaryValue> <c_op:CallOp> <op:Operation2> <c:CommandArgs> => // %prec tLOWEST
+  <prim:Primary> <c_op:CallOp> <op:Operation2> <c:CommandArgs> => // %prec tLOWEST
     p.new_call(prim, op, c, c_op),
-  <prim:PrimaryValue> <c_op:CallOp> <op:Operation2> <c:CommandArgs> <b:CmdBraceBlock> => {
+  <prim:Primary> <c_op:CallOp> <op:Operation2> <c:CommandArgs> <b:CmdBraceBlock> => {
     p.args_with_block(c, b);
     p.new_call(prim, op, c, c_op)
   },
-  <prim:PrimaryValue> "colon2" <op:Operation2> <c:CommandArgs> => // %prec tLOWEST
+  <prim:Primary> "colon2" <op:Operation2> <c:CommandArgs> => // %prec tLOWEST
     p.new_call(prim, op, c, Symbol::from("::")),
-  <prim:PrimaryValue> "colon2" <op:Operation2> <c:CommandArgs> <b:CmdBraceBlock> => {
+  <prim:Primary> "colon2" <op:Operation2> <c:CommandArgs> <b:CmdBraceBlock> => {
     p.args_with_block(c, b);
     p.new_call(prim, op, c, Symbol::from("::"))
   },
@@ -339,15 +335,15 @@ MlhsPost: Vec<NodeRef> = {
 
 MlhsNode: NodeRef = { // lhs
   <Variable> => p.assignable(<>),
-  <prim:PrimaryValue> "[" <c:OptCallArgs> Rbracket =>
+  <prim:Primary> "[" <c:OptCallArgs> Rbracket =>
     p.new_call(prim, Symbol::from(""), c, Symbol::from(".")),
-  <prim:PrimaryValue> <c_op:CallOp> <id:"ident"> =>
+  <prim:Primary> <c_op:CallOp> <id:"ident"> =>
     p.new_call(prim, id, vec![], c_op),
-  <prim:PrimaryValue> "colon2" <id:"ident"> =>
+  <prim:Primary> "colon2" <id:"ident"> =>
     p.new_call(prim, id, vec![], Symbol::from("::")),
-  <prim:PrimaryValue> <c_op:CallOp> <id:"const"> =>
+  <prim:Primary> <c_op:CallOp> <id:"const"> =>
     p.new_call(prim, id, vec![], c_op),
-  <prim:PrimaryValue> "colon2" <id:"const"> => {
+  <prim:Primary> "colon2" <id:"const"> => {
     if (p.in_def || p.in_single)
       return Err("dynamic constant assignment");
     p.new_colon2(prim, id, vec![], Symbol::from("::"))
@@ -362,15 +358,15 @@ MlhsNode: NodeRef = { // lhs
 
 Lhs: NodeRef = {
   <Variable> => p.assignable(<>),
-  <prim:PrimaryValue> "[" <c:OptCallArgs> Rbracket =>
+  <prim:Primary> "[" <c:OptCallArgs> Rbracket =>
     p.new_call(prim, Symbol::from(""), c, Symbol::from(".")),
-  <prim:PrimaryValue> <c_op:CallOp> <id:"ident"> =>
+  <prim:Primary> <c_op:CallOp> <id:"ident"> =>
     p.new_call(prim, id, vec![], c_op),
-  <prim:PrimaryValue> "colon2" <id:"ident"> =>
+  <prim:Primary> "colon2" <id:"ident"> =>
     p.new_call(prim, id, vec![], Symbol::from("::")),
-  <prim:PrimaryValue> <c_op:CallOp> <id:"const"> =>
+  <prim:Primary> <c_op:CallOp> <id:"const"> =>
     p.new_call(prim, id, vec![], c_op),
-  <prim:PrimaryValue> "colon2" <id:"const"> => {
+  <prim:Primary> "colon2" <id:"const"> => {
     if (p.in_def || p.in_single)
       return Err("dynamic constant assignment");
     p.new_colon2(prim, id, vec![], Symbol::from("::"))
@@ -391,7 +387,7 @@ Cname: Symbol = {
 Cpath: (CpathType, Symbol) = {
   "colon3" <Cname> => (Absolute, <>),
   <Cname> => (Relative, <>),
-  <prim:PrimaryValue> "colon2" <c:Cname> => (Expression(prim), c),
+  <prim:Primary> "colon2" <c:Cname> => (Expression(prim), c),
 };
 
 Fname: Symbol = {
@@ -451,77 +447,90 @@ Reswords: () = {
   "while", "until",
 };
 
-Arg: NodeRef = {
-  <l:Lhs> "=" <r:ArgRhs> => p.new_asgn(l, r),
-  <l:VarLhs> <op:"op_asgn"> <r:ArgRhs> => p.new_op_asgn(l, op, r),
-  <prim:PrimaryValue> "[" <c:OptCallArgs> Rbracket <op:"op_asgn"> <r:ArgRhs> =>
-    p.new_op_asgn(p.new_call(cprim, Symbol::from("[]")), op, r),
-  <prim:PrimaryValue> <c_op:CallOp> <id:"ident"> <op:"op_asgn"> <r:ArgRhs> =>
-    p.new_op_asgn(p.new_call(prim, id, vec![], c_op), op, r),
-  <prim:PrimaryValue> <c_op:CallOp> <id:"const"> <op:"op_asgn"> <r:ArgRhs> =>
-    p.new_op_asgn(p.new_call(prim, id, vec![], c_op), op, r),
-  <prim:PrimaryValue> "colon2" <id:"ident"> <op:"op_asgn"> <r:ArgRhs> =>
-    p.new_op_asgn(p.new_call(prim, id, vec![], Symbol::from("::"), op, r)),
-  <prim:PrimaryValue> "colon2" <id:"const"> <op:"op_asgn"> <r:ArgRhs> =>
-    Err("constant re-assignment"),
-  "colon3" <id:"const"> <op:"op_asgn"> <r:ArgRhs> =>
-    Err("constant re-assignment"),
-  <b:Backref> <op:"op_asgn"> <r:ArgRhs> => p.backref_error(b),
-  <l:Arg> ".." <r:Arg> => p.new_dot2(l, r),
-  <l:Arg> "..." <r:Arg> => p.new_dot3(l, r),
-  <l:Arg> "+" <r:Arg> => p.call_bin_op(l, "+", r),
-  <l:Arg> "-" <r:Arg> => p.call_bin_op(l, "-", r),
-  <l:Arg> "*" <r:Arg> => p.call_bin_op(l, "*", r),
-  <l:Arg> "/" <r:Arg> => p.call_bin_op(l, "/", r),
-  <l:Arg> "%" <r:Arg> => p.call_bin_op(l, "%", r),
-  <l:Arg> "**" <r:Arg> => p.call_bin_op(l, "**", r),
-  "uminus_num" <l:"integer"> "**" <r:Arg> =>
-    p.call_uni_op(p.call_bin_op(l, "**", r), "-@"),
-  "uminus_num" <l:"float"> "**" <r:Arg> =>
-    p.call_uni_op(p.call_bin_op(l, "**", r), "-@"),
-  "uplus" <a:Arg> => p.call_uni_op(a, "+@"),
-  "uminus" <a:Arg> => p.call_uni_op(a, "-@"),
-  <l:Arg> "|" <r:Arg> => p.call_bin_op(l, "|", r),
-  <l:Arg> "^" <r:Arg> => p.call_bin_op(l, "^", r),
-  <l:Arg> "&" <r:Arg> => p.call_bin_op(l, "&", r),
-  <l:Arg> "<=>" <r:Arg> => p.call_bin_op(l, "<=>", r),
-  <l:Arg> ">" <r:Arg> => p.call_bin_op(l, ">", r),
-  <l:Arg> ">=" <r:Arg> => p.call_bin_op(l, ">=", r),
-  <l:Arg> "<" <r:Arg> => p.call_bin_op(l, "<", r),
-  <l:Arg> "<=" <r:Arg> => p.call_bin_op(l, "<=", r),
-  <l:Arg> "==" <r:Arg> => p.call_bin_op(l, "==", r),
-  <l:Arg> "===" <r:Arg> => p.call_bin_op(l, "===", r),
-  <l:Arg> "!=" <r:Arg> => p.call_bin_op(l, "!=", r),
-  <l:Arg> "=~" <r:Arg> => p.call_bin_op(l, "=~", r),
-  <l:Arg> "!~" <r:Arg> => p.call_bin_op(l, "!~", r),
-  "!" <a:Arg> => p.call_uni_op(p.cond(a), "!"),
-  "~" <a:Arg> => p.call_uni_op(p.cond(a), "~"),
-  <l:Arg> "<<" <r:Arg> => p.call_bin_op(l, "<<", r),
-  <l:Arg> ">>" <r:Arg> => p.call_bin_op(l, ">>", r),
-  <l:Arg> "&&" <r:Arg> => p.new_and(l, r),
-  <l:Arg> "||" <r:Arg> => p.new_or(l, r),
-  <c:Arg> "?" <t:Arg> OptNl ":" <f:Arg> => p.new_if(p.cond(c), t, f),
+Arg1: NodeRef = {
+  "!" <a:Primary> => p.call_uni_op(p.cond(a), "!"),
+  "~" <a:Primary> => p.call_uni_op(p.cond(a), "~"),
+  "uplus" <a:Primary> => p.call_uni_op(a, "+@"),
   Primary,
 };
 
-ArefArgs: Vec<NodeRef> = {
-  None => vec![],
-  <a:Args> Trailer => a,
-  <a:Args> Comma <h:Assocs> Trailer => { a.push(p.new_hash(h)); a },
-  <h:Assocs> Trailer => { vec![p.new_hash(h)] },
+Arg2: NodeRef = {
+  <l:Arg1> "**" <r:Arg2> => p.call_bin_op(l, "**", r),
+  Arg1,
 };
 
-ArgsRhs: NodeRef = {
-  Arg, // %prec "op_asgn"
-  <a:Arg> "mod_rescue" <r:Arg> => {
-    p.void_expr_error(a);
-    p.void_expr_error(r);
-    p.new_mod_rescue(a, r)
-  },
+Arg3: NodeRef = {
+  "uminus" <a:Arg2> => p.call_uni_op(a, "-@"),
+  Arg2,
 };
 
-ParenArgs: Vec<NodeRef> = {
-  "(" <OptCallArgs> Rparen => <>,
+Arg4: NodeRef = {
+  <l:Arg4> "*" <r:Arg3> => p.call_bin_op(l, "*", r),
+  <l:Arg4> "/" <r:Arg3> => p.call_bin_op(l, "/", r),
+  <l:Arg4> "%" <r:Arg3> => p.call_bin_op(l, "%", r),
+  Arg3,
+};
+
+Arg5: NodeRef = {
+  <l:Arg5> "+" <r:Arg4> => p.call_bin_op(l, "+", r),
+  <l:Arg5> "-" <r:Arg4> => p.call_bin_op(l, "-", r),
+  Arg4,
+};
+
+Arg6: NodeRef = {
+  <l:Arg6> "<<" <r:Arg5> => p.call_bin_op(l, "<<", r),
+  <l:Arg6> ">>" <r:Arg5> => p.call_bin_op(l, ">>", r),
+  Arg5,
+};
+
+Arg7: NodeRef = {
+  <l:Arg7> "&" <r:Arg6> => p.call_bin_op(l, "&", r),
+  Arg6,
+};
+
+Arg8: NodeRef = {
+  <l:Arg8> "|" <r:Arg7> => p.call_bin_op(l, "|", r),
+  <l:Arg8> "^" <r:Arg7> => p.call_bin_op(l, "^", r),
+  Arg7,
+};
+
+Arg9: NodeRef = {
+  <l:Arg9> ">"  <r:Arg8> => p.call_bin_op(l, ">",  r),
+  <l:Arg9> ">=" <r:Arg8> => p.call_bin_op(l, ">=", r),
+  <l:Arg9> "<"  <r:Arg8> => p.call_bin_op(l, "<",  r),
+  <l:Arg9> "<=" <r:Arg8> => p.call_bin_op(l, "<=", r),
+  Arg8,
+};
+
+Arg10: NodeRef = {
+  <l:Arg10> "<=>" <r:Arg9> => p.call_bin_op(l, "<=>", r),
+  <l:Arg10> "==" <r:Arg9> => p.call_bin_op(l, "==", r),
+  <l:Arg10> "===" <r:Arg9> => p.call_bin_op(l, "===", r),
+  <l:Arg10> "!=" <r:Arg9> => p.call_bin_op(l, "!=", r),
+  <l:Arg10> "=~" <r:Arg9> => p.call_bin_op(l, "=~", r),
+  <l:Arg10> "!~" <r:Arg9> => p.call_bin_op(l, "!~", r),
+  Arg9,
+};
+
+Arg11: NodeRef = {
+  <l:Arg11> "&&" <r:Arg10> => p.new_and(l, r),
+  Arg10,
+};
+
+Arg12: NodeRef = {
+  <l:Arg12> "||" <r:Arg11> => p.new_or(l, r),
+  Arg11,
+};
+
+Arg13: NodeRef = {
+  <l:Arg13> ".." <r:Arg12> => p.new_dot2(l, r),
+  <l:Arg13> "..." <r:Arg12> => p.new_dot3(l, r),
+  Arg12,
+};
+
+Arg14: NodeRef = {
+  <c:Arg13> "?" <t:Arg13> OptNl ":" <f:Arg13> => p.new_if(p.cond(c), t, f),
+  Arg13,
 };
 
 ArgRhs: NodeRef = {
@@ -532,6 +541,34 @@ ArgRhs: NodeRef = {
     p.new_mod_rescue(a, r)
   },
 };
+
+Arg: NodeRef = {
+  <l:Lhs> "=" <r:ArgRhs> => p.new_asgn(l, r),
+  <l:VarLhs> <op:"op_asgn"> <r:Arg> => p.new_op_asgn(l, op, r),
+  <prim:Primary> "[" <c:OptCallArgs> Rbracket <op:"op_asgn"> <r:ArgRhs> =>
+    p.new_op_asgn(p.new_call(cprim, Symbol::from("[]")), op, r),
+  <prim:Primary> <c_op:CallOp> <id:"ident"> <op:"op_asgn"> <r:ArgRhs> =>
+    p.new_op_asgn(p.new_call(prim, id, vec![], c_op), op, r),
+  <prim:Primary> <c_op:CallOp> <id:"const"> <op:"op_asgn"> <r:ArgRhs> =>
+    p.new_op_asgn(p.new_call(prim, id, vec![], c_op), op, r),
+  <prim:Primary> "colon2" <id:"ident"> <op:"op_asgn"> <r:ArgRhs> =>
+    p.new_op_asgn(p.new_call(prim, id, vec![], Symbol::from("::"), op, r)),
+  <prim:Primary> "colon2" <id:"const"> <op:"op_asgn"> <r:ArgRhs> =>
+    Err("constant re-assignment"),
+  "colon3" <id:"const"> <op:"op_asgn"> <r:ArgRhs> =>
+    Err("constant re-assignment"),
+  <b:Backref> <op:"op_asgn"> <r:Arg14> => p.backref_error(b),
+  Arg14,
+};
+
+ArefArgs: Vec<NodeRef> = {
+  None => vec![],
+  <a:Args> Trailer => a,
+  <a:Args> Comma <h:Assocs> Trailer => { a.push(p.new_hash(h)); a },
+  <h:Assocs> Trailer => { vec![p.new_hash(h)] },
+};
+
+ParenArgs: Vec<NodeRef> = { "(" <OptCallArgs> Rparen => <> };
 
 OptParenArgs: Vec<NodeRef> = {
   None => vec![],
@@ -626,7 +663,7 @@ Primary: NodeRef = {
   "lparen_arg" // p.lstate = LexerState::ENDARG;
     Rparen => p.new_nil(),
   "lparen" <Compstmt> "}" => <>,
-  <prim:PrimaryValue> "colon2" <id:"const"> => p.new_colon2(prim, id),
+  <prim:Primary> "colon2" <id:"const"> => p.new_colon2(prim, id),
   "colon3" <"const"> => p.new_colo3(<>),
   "lbrack" <ArefArgs> "]" => p.new_array(<>),
   "return" => p.new_return(vec![]),
@@ -643,32 +680,32 @@ Primary: NodeRef = {
       p.new_lambda(a, b)
       // p.local_unnest(); p.cmdarg_stack = $<stack>4; CMDARG_LEXPOP();
     },
-  "if" <c:ExprValue> Then
+  "if" <c:Expr> Then
     <s:Compstmt>
     <t:IfTail>
     "end" => p.new_if(p.cond(c), s, t),
-  "unless" <c:ExprValue> Then
+  "unless" <c:Expr> Then
     <s:Compstmt>
     <e:OptElse>
     "end" => p.new_unless(p.cond(c), s, e),
   "while" // COND_PUSH(1);
-    <c:ExprValue> Do // COND_POP();
+    <c:Expr> Do // COND_POP();
     <s:Compstmt>
     <e:OptElse>
     "end" => p.new_while(p.cond(c), s, e),
   "until" // COND_PUSH(1);
-    <c:ExprValue> Do // COND_POP();
+    <c:Expr> Do // COND_POP();
     <s:Compstmt>
     <e:OptElse>
     "end" => p.new_until(p.cond(c), s, e),
-  "case" <c:ExprValue> OptTerms
+  "case" <c:Expr> OptTerms
     <b:CaseBody>
     "end" => p.new_case(Some(c), b),
   "case" OptTerms
     <b:CaseBody>
     "end" => p.new_case(None(c), b),
   "for" <v:ForVar> "in" // COND_PUSH(1);
-    <e:ExprValue> Do // COND_POP();
+    <e:Expr> Do // COND_POP();
     <s:Compstmt>
     "end" => p.new_for(v, e, s),
   "class" <c:Cpath> <s:Superclass>
@@ -718,15 +755,13 @@ Primary: NodeRef = {
   "retry" => p.new_retry(),
 };
 
-PrimaryValue: NodeRef = { Primary };
-
 Then: () = { Term, "then", Term "then" };
 
 Do: () = { Term, "do_cond" };
 
 IfTail: OptNodeRef = {
   OptElse,
-  "elsif" <c:ExprValue> Then
+  "elsif" <c:Expr> Then
     <s:Compstmt>
     <t:IfTail> => Some(p.new_if(p.cond(c), s, t)),
 };
@@ -853,19 +888,19 @@ BlockCall: NodeRef = {
 
 MethodCall: NodeRef = {
   <op:Operation> <a:ParenArgs> => p.new_fcall(op, a),
-  <prim:PrimaryValue> <c_op:CallOp> <op:Operation2> <a:OptParenArgs> =>
+  <prim:Primary> <c_op:CallOp> <op:Operation2> <a:OptParenArgs> =>
     p.new_call(prim, op, a, c_op),
-  <prim:PrimaryValue> "colon2" <op:Operation2> <a:ParenArgs> =>
+  <prim:Primary> "colon2" <op:Operation2> <a:ParenArgs> =>
     p.new_call(prim, op, a, "::"),
-  <prim:PrimaryValue> "colon2" <op:Operation3> =>
+  <prim:Primary> "colon2" <op:Operation3> =>
     p.new_call(prim, op, vec![], "::"),
-  <prim:PrimaryValue> <c_op:CallOp> <a:ParenArgs> =>
+  <prim:Primary> <c_op:CallOp> <a:ParenArgs> =>
     p.new_call(prim, Symbol::from("call"), a, c_op),
-  <prim:PrimaryValue> "colon2" <a:ParenArgs> =>
+  <prim:Primary> "colon2" <a:ParenArgs> =>
     p.new_call(prim, Symbol::from("call"), a, "::"),
   "super" <ParenArgs> => p.new_super(<>),
   "super" => p.new_zsuper(),
-  <prim:PrimaryValue> "[" <a:OptCallArgs> Rbracket =>
+  <prim:Primary> "[" <a:OptCallArgs> Rbracket =>
     p.new_call(prim, Symbol::from("[]"), a, "."),
 };
 
@@ -1064,7 +1099,7 @@ Backref: NodeRef = { "nth_ref", "back_ref", };
 
 Superclass: OptNodeRef = {
   Term => None,
-  SuperclassSymbol <ExprValue> Term => <>,
+  SuperclassSymbol <Expr> Term => <>,
 };
 
 SuperclassSymbol: () = {
@@ -1133,7 +1168,7 @@ FArgItem: NodeRef = {
 
 FArg: Vec<NodeRef> = {
   <FArgItem> => vec![<>],
-  <l:FArgItem> "," <a:FArgItem> => { l.push(a); l },
+  <l:FArg> "," <a:FArgItem> => { l.push(a); l },
 };
 
 FOptAsgn: Symbol = {
@@ -1148,7 +1183,7 @@ FOpt: (Symbol, NodeRef) = {
 };
 
 FBlockOpt: (Symbol, NodeRef) = {
-  <o:FOptAsgn> <v:PrimaryValue> => {
+  <o:FOptAsgn> <v:Primary> => {
     p.void_expr_error(v);
     (o, v)
   },
