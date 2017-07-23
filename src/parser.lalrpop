@@ -167,58 +167,59 @@ extern {
   }
 }
 
-pub Program: NodeRef = { <TopStmt> OptTerms => <> };
+pub Program: NodeRef = { TopCompstmt };
 
-TopCompstmt: NodeRef = { <TopStmts> OptTerms => <> };
+TopCompstmt: NodeRef = { TopStmts };
 
 TopStmts: BeginNodeRef = {
   None => p.new_begin(None),
   <t:TopStmt> => p.new_begin(Some(t)),
-  <stmts:TopStmts> Terms <t:TopStmt> => { stmts.push(t); stmts },
+  <stmts:TopStmts> Term+ <t:TopStmt> Term* => { stmts.push(t); stmts },
   ! <t:TopStmt> => p.new_begin(None),
 };
 
 TopStmt: NodeRef = {
   Stmt,
-  "BEGIN" "{" TopCompstmt "}" => {
-    Err("BEGIN not supported")
-  }
+  "BEGIN" "{" TopCompstmt "}" => Err("BEGIN not supported"),
 };
 
 Bodystmt: NodeRef = {
-  <c:Compstmt> <r:OptRescue> <el:OptElse> <en:OptEnsure> => {
-    p.new_bodystmt(c, r, el, en)
-  }
+  <c:Compstmt> <r:OptRescue> <el:OptElse> <en:OptEnsure> =>
+    p.new_bodystmt(c, r, el, en),
 };
 
-Compstmt: Vec<NodeRef> = { <s:Stmts> OptTerms => s };
+Compstmt: Vec<NodeRef> = { <Stmts> Term* => <> };
 
 Stmts: Vec<NodeRef> = {
   None => vec![],
   Stmt => vec![<>],
-  <res:Stmts> Terms <s:Stmt> => { res.push(s); res },
+  <res:Stmts> Term+ <s:Stmt> => { res.push(s); res },
   ! <s:Stmt> => vec![s],
 };
 
-Stmt: NodeRef = {
+StmtNoMod: NodeRef = {
   "alias" <a:AliasFsym> <f:Fsym> => p.new_alias(a, f),
   "undef" <l:UndefList> => p.new_undef(l),
-  <s:Stmt> "mod_if" <e:Expr> => p.new_if(p.cond(e) s, None),
-  <s:Stmt> "mod_unless" <e:Expr> => p.new_unless(p.cond(e), s, None),
-  <s:Stmt> "mod_while" <e:Expr> => p.new_while(p.cond(e), s),
-  <s:Stmt> "mod_until" <e:Expr> => p.new_until(p.cond(e), s),
-  <s:Stmt> "mod_rescue" <r:Stmt> => p.new_mod_rescue(s, r),
-  "END" "{" <s:Compstmt> "}" => Err("END not supported"),
   CommandAsgn,
+  "END" "{" <s:Compstmt> "}" => Err("END not supported"),
   <l:Mlhs> "=" <c:CommandCall> => p.new_masgn(l, c),
   <l:Lhs> "=" <r:Mrhs> => p.new_asgn(l, p.new_array(r)),
   <l:Mlhs> "=" <a:Arg> => p.new_masgn(l, a),
-  <l:Lhs> "=" <r:Mrhs> => p.new_masgn(l, p.new_array(r)),
-  Expr
+  <l:Mlhs> "=" <r:Mrhs> => p.new_masgn(l, p.new_array(r)),
+  Expr,
+};
+
+Stmt: NodeRef = {
+  <s:StmtNoMod> "mod_if" <e:StmtNoMod> => p.new_if(p.cond(e) s, None),
+  <s:StmtNoMod> "mod_unless" <e:StmtNoMod> => p.new_unless(p.cond(e), s, None),
+  <s:StmtNoMod> "mod_while" <e:StmtNoMod> => p.new_while(p.cond(e), s),
+  <s:StmtNoMod> "mod_until" <e:StmtNoMod> => p.new_until(p.cond(e), s),
+  // <s:Stmt> "mod_rescue" <r:StmtNoMod> => p.new_mod_rescue(s, r),
+  StmtNoMod,
 };
 
 AliasFsym: Symbol = {
-  <Fsym> => { p.lstate = LexerState::FNAME; <> }
+  Fsym => { p.lstate = LexerState::FNAME; <> }
 };
 
 CommandAsgn: NodeRef = {
@@ -239,17 +240,24 @@ CommandAsgn: NodeRef = {
 
 CommandRhs: NodeRef = {
   CommandCall, // %prec "op_asgn"
-  <c:CommandCall> "mod_rescue" <s:Stmt> => p.new_mod_rescue(c, s),
+  <c:StmtNoMod> "mod_rescue" <s:CommandCall> => p.new_mod_rescue(c, s),
   CommandAsgn,
+};
+
+ExprNot: NodeRef = {
+  "not" Nl? <e:Arg> => p.call_uni_op(p.cond(e), "!"),
+};
+
+ExprAndOr: NodeRef = {
+  <l:ExprAndOr> "and" <r:ExprNot> => p.new_and(l, r),
+  <l:ExprAndOr> "or" <r:ExprNot> => p.new_or(l, r),
+  ExprNot,
 };
 
 Expr: NodeRef = {
   CommandCall,
-  <l:Expr> "and" <r:Expr> => p.new_and(l, r),
-  <l:Expr> "or" <r:Expr> => p.new_or(l, r),
-  "not" OptNl <e:Expr> => p.call_uni_op(p.cond(e), "!"),
+  ExprAndOr,
   "!" <c:CommandCall> => p.call_uni_op(p.cond(c), "!"),
-  Arg
 };
 
 CommandCall: NodeRef = { Command, BlockCommand };
@@ -306,12 +314,12 @@ MlhsInner: Vec<NodeRef> = {
 };
 
 MlhsBasic: (Vec<NodeRef>, Option<OptNodeRef>, Vec<NodeRef>) = {
-  <MlhsList> => (<>, None, vec![]),
-  <l:MlhsList> <i:MlhsItem> => { l.push(i); (l, None, vec![]) },
-  <l:MlhsList> "star" <n:MlhsNode> => (l, Some(Some(n)), vec![]),
-  <l:MlhsList> "star" <n:MlhsNode> "," <post:MlhsPost> => (l, Some(Some(n)), post),
-  <l:MlhsList> "star" => (l, Some(None), vec![]),
-  <l:MlhsList> "star" "," <post:MlhsPost> => (l, Some(None), post),
+  MlhsHead => (<>, None, vec![]),
+  <l:MlhsHead> <i:MlhsItem> => { l.push(i); (l, None, vec![]) },
+  <l:MlhsHead> "star" <n:MlhsNode> => (l, Some(Some(n)), vec![]),
+  <l:MlhsHead> "star" <n:MlhsNode> "," <post:MlhsPost> => (l, Some(Some(n)), post),
+  <l:MlhsHead> "star" => (l, Some(None), vec![]),
+  <l:MlhsHead> "star" "," <post:MlhsPost> => (l, Some(None), post),
   "star" <n:MlhsNode> => (vec![], Some(Some(n)), vec![]),
   "star" <n:MlhsNode> "," <post:MlhsPost> => (vec![], Some(Some(n)), post),
   "star" => (vec![], Some(None), vec![]),
@@ -323,18 +331,18 @@ MlhsItem: NodeRef = {
   "lparen" <MlhsInner> Rparen => p.new_masgn(<>, vec![]),
 };
 
-MlhsList: Vec<NodeRef> = {
+MlhsHead: Vec<NodeRef> = {
   <MlhsItem> "," => vec![<>],
-  <l:MlhsList> <i:MlhsItem> "," => { l.push(i); l },
+  <l:MlhsHead> <i:MlhsItem> "," => { l.push(i); l },
 };
 
 MlhsPost: Vec<NodeRef> = {
-  <MlhsItem> => vec![<>],
-  <l:MlhsList> <i:MlhsItem> => { l.push(i); l },
+  MlhsItem => vec![<>],
+  <l:MlhsPost> Comma <i:MlhsItem> => { l.push(i); l },
 };
 
 MlhsNode: NodeRef = { // lhs
-  <Variable> => p.assignable(<>),
+  Variable => p.assignable(<>),
   <prim:Primary> "[" <c:OptCallArgs> Rbracket =>
     p.new_call(prim, Symbol::from(""), c, Symbol::from(".")),
   <prim:Primary> <c_op:CallOp> <id:"ident"> =>
@@ -353,11 +361,11 @@ MlhsNode: NodeRef = { // lhs
       return Err("dynamic constant assignment");
     p.new_colon3(id)
   },
-  <b:Backref> => p.backref_error(b)
+  // <b:Backref> => p.backref_error(b)
 };
 
 Lhs: NodeRef = {
-  <Variable> => p.assignable(<>),
+  Variable => p.assignable(<>),
   <prim:Primary> "[" <c:OptCallArgs> Rbracket =>
     p.new_call(prim, Symbol::from(""), c, Symbol::from(".")),
   <prim:Primary> <c_op:CallOp> <id:"ident"> =>
@@ -386,20 +394,20 @@ Cname: Symbol = {
 
 Cpath: (CpathType, Symbol) = {
   "colon3" <Cname> => (Absolute, <>),
-  <Cname> => (Relative, <>),
+  Cname => (Relative, <>),
   <prim:Primary> "colon2" <c:Cname> => (Expression(prim), c),
 };
 
 Fname: Symbol = {
   "ident", "const", "fid",
-  <Op> => { p.lstate = LexerState::ENDFN; <> },
-  <Reswords> => {  p.lstate = LexerState::ENDFN; <> },
+  Op => { p.lstate = LexerState::ENDFN; <> },
+  Reswords => {  p.lstate = LexerState::ENDFN; <> },
 };
 
 Fsym: Symbol = { Fname, BasicSymbol };
 
 UndefList: Vec<Symbol> = {
-  <Fsym> => vec![<>],
+  Fsym => vec![<>],
   <l:UndefList> UndefListComma <s:Fsym> => { l.push(s); l },
 };
 
@@ -503,12 +511,12 @@ Arg9: NodeRef = {
 };
 
 Arg10: NodeRef = {
-  <l:Arg10> "<=>" <r:Arg9> => p.call_bin_op(l, "<=>", r),
-  <l:Arg10> "==" <r:Arg9> => p.call_bin_op(l, "==", r),
-  <l:Arg10> "===" <r:Arg9> => p.call_bin_op(l, "===", r),
-  <l:Arg10> "!=" <r:Arg9> => p.call_bin_op(l, "!=", r),
-  <l:Arg10> "=~" <r:Arg9> => p.call_bin_op(l, "=~", r),
-  <l:Arg10> "!~" <r:Arg9> => p.call_bin_op(l, "!~", r),
+  <l:Arg9> "<=>" <r:Arg9> => p.call_bin_op(l, "<=>", r),
+  <l:Arg9> "==" <r:Arg9> => p.call_bin_op(l, "==", r),
+  <l:Arg9> "===" <r:Arg9> => p.call_bin_op(l, "===", r),
+  <l:Arg9> "!=" <r:Arg9> => p.call_bin_op(l, "!=", r),
+  <l:Arg9> "=~" <r:Arg9> => p.call_bin_op(l, "=~", r),
+  <l:Arg9> "!~" <r:Arg9> => p.call_bin_op(l, "!~", r),
   Arg9,
 };
 
@@ -523,19 +531,19 @@ Arg12: NodeRef = {
 };
 
 Arg13: NodeRef = {
-  <l:Arg13> ".." <r:Arg12> => p.new_dot2(l, r),
-  <l:Arg13> "..." <r:Arg12> => p.new_dot3(l, r),
+  <l:Arg12> ".." <r:Arg12> => p.new_dot2(l, r),
+  <l:Arg12> "..." <r:Arg12> => p.new_dot3(l, r),
   Arg12,
 };
 
 Arg14: NodeRef = {
-  <c:Arg13> "?" <t:Arg13> OptNl ":" <f:Arg13> => p.new_if(p.cond(c), t, f),
+  <c:Arg13> "?" <t:Arg13> Nl? ":" <f:Arg13> => p.new_if(p.cond(c), t, f),
   Arg13,
 };
 
 ArgRhs: NodeRef = {
-  Arg, // %prec "op_asgn"
-  <a:Arg> "mod_rescue" <r:Arg> => {
+  Arg14, // %prec "op_asgn"
+  <a:ArgRhs> "mod_rescue" <r:Arg14> => {
     p.void_expr_error(a);
     p.void_expr_error(r);
     p.new_mod_rescue(a, r)
@@ -544,7 +552,7 @@ ArgRhs: NodeRef = {
 
 Arg: NodeRef = {
   <l:Lhs> "=" <r:ArgRhs> => p.new_asgn(l, r),
-  <l:VarLhs> <op:"op_asgn"> <r:Arg> => p.new_op_asgn(l, op, r),
+  <l:VarLhs> <op:"op_asgn"> <r:ArgRhs> => p.new_op_asgn(l, op, r),
   <prim:Primary> "[" <c:OptCallArgs> Rbracket <op:"op_asgn"> <r:ArgRhs> =>
     p.new_op_asgn(p.new_call(cprim, Symbol::from("[]")), op, r),
   <prim:Primary> <c_op:CallOp> <id:"ident"> <op:"op_asgn"> <r:ArgRhs> =>
@@ -584,7 +592,7 @@ OptCallArgs: Vec<NodeRef> = {
 };
 
 CallArgs: Vec<NodeRef> = {
-  <Command> => vec![<>],
+  Command => vec![<>],
   <a:Args> <b:OptBlockArg> => {
     match b { Some(b) => { a.push(b); }, _ => {} }; a
   },
@@ -595,7 +603,7 @@ CallArgs: Vec<NodeRef> = {
     match b { Some(b) => { a.push(b); }, _ => {} };
     a
   },
-  <BlockArg> => vec![<>],
+  BlockArg => vec![<>],
 };
 
 CommandArgs: Vec<NodeRef> = {
@@ -618,7 +626,7 @@ Comma: () = {
 };
 
 Args: Vec<NodeRef> = {
-  <Arg> => {
+  Arg => {
     p.void_expr_error(<>);
     vec![<>]
   },
@@ -643,11 +651,11 @@ Mrhs: Vec<NodeRef> = {
   },
   <l:Args> Comma "star" <a:Arg> => {
     p.void_expr_error(a);
-    l.push(a); l
+    l.push(p.new_splat(a)); l
   },
   "star" <Arg> => {
     p.void_expr_error(<>);
-    vec![<>]
+    vec![p.new_splat(<>)]
   },
 };
 
@@ -698,10 +706,10 @@ Primary: NodeRef = {
     <s:Compstmt>
     <e:OptElse>
     "end" => p.new_until(p.cond(c), s, e),
-  "case" <c:Expr> OptTerms
+  "case" <c:Expr> Term*
     <b:CaseBody>
     "end" => p.new_case(Some(c), b),
-  "case" OptTerms
+  "case" Term*
     <b:CaseBody>
     "end" => p.new_case(None(c), b),
   "for" <v:ForVar> "in" // COND_PUSH(1);
@@ -771,20 +779,20 @@ OptElse: OptNodeRef = {
   "else" <Compstmt> => Some(<>)
 };
 
-ForVar: Vec<NodeRef> = { <Lhs> => vec![<>], Mlhs };
+ForVar: Vec<NodeRef> = { Lhs => vec![<>], Mlhs };
 
 FMarg: NodeRef = {
-  <FNormArg> => p.new_arg(<>),
+  FNormArg => p.new_arg(<>),
   "lparen" <FMargs> Rparen => p.new_masgn(<>, vec![]),
 };
 
 FMargList: Vec<NodeRef> = {
-  <FMarg> => vec![<>],
+  FMarg => vec![<>],
   <l:FMargList> "," <a:FMarg> => { l.push(a); l },
 };
 
 FMargs: (Vec<NodeRef>, Option<Option<NodeRef>>, Vec<NodeRef>) = {
-  <FMargList> => (<>, None, vec![]),
+  FMargList => (<>, None, vec![]),
   <l:FMargList> "," "star" <r:FNormArg> => (l, Some(Some(r)), vec![]),
   <l:FMargList> "," "star" <r:FNormArg> "," <p:FMargList> => (l, Some(Some(r)), p),
   <l:FMargList> "," "star" => (l, Some(None), vec![]),
@@ -826,7 +834,7 @@ BlockParam: NodeRef = {
 
 OptBlockParam: OptNodeRef = {
   None => None,
-  <BlockParamDef> => {
+  BlockParamDef => {
     p.cmd_start = TRUE;
     <>
   },
@@ -838,7 +846,7 @@ BlockParamDef: NodeRef = {
   "|" <BlockParam> OptBvDecl "|" => Some(<>),
 };
 
-OptBvDecl: () = { OptNl, OptNl ";" BvDecls OptNl };
+OptBvDecl: () = { Nl?, Nl? ";" BvDecls Nl? };
 
 BvDecls: () = { Bvar, BvDecls "," Bvar };
 
@@ -929,8 +937,8 @@ CaseBody: (OptNodeRef, NodeRef, OptNodeRef) = {
 };
 
 Cases: (OptNodeRef, NodeRef, OptNodeRef) = {
-  <OptElse> => (None, s, None),
-  <CaseBody> => <>,
+  OptElse => (None, s, None),
+  CaseBody,
 };
 
 OptRescue: Option<(Vec<NodeRef>, OptNodeRef, NodeRef, OptNodeRef)> = {
@@ -941,7 +949,7 @@ OptRescue: Option<(Vec<NodeRef>, OptNodeRef, NodeRef, OptNodeRef)> = {
 };
 
 ExcList: Vec<NodeRef> = {
-  <Arg> => vec![<>],
+  Arg => vec![<>],
   Mrhs,
   None, => vec![],
 };
@@ -1040,7 +1048,7 @@ Words: NodeRef = {
 };
 
 Symbol: NodeRef = {
-  <BasicSymbol> => p.new_sym(<>),
+  BasicSymbol => p.new_sym(<>),
   "symbeg" "string_beg" <r:StringRep> <s:"string"> => {
     p.lstate = LexerState::END;
     r.push(s);
@@ -1083,10 +1091,10 @@ Variable: NodeRef = {
   <"const"> => p.new_const(<>),
 };
 
-VarLhs: NodeRef = { <Variable> => p.assignable(<>) };
+VarLhs: NodeRef = { Variable => p.assignable(<>) };
 
 VarRef: NodeRef = {
-  <Variable> => p.var_reference(<>),
+  Variable => p.var_reference(<>),
   "nil" => p.new_nil(),
   "self" => p.new_self(),
   "true" => p.new_true(),
@@ -1139,7 +1147,7 @@ FArgs: NodeRef = {
   <r:FRestArg> <b:OptFBlockArg> => p.new_args(vec![], vec![], Some(r), vec![], b),
   <r:FRestArg> "," <post:FArg> <b:OptFBlockArg> =>
     p.new_args(vec![], vec![], Some(r), post, b),
-  <FBlockArg> => p.new_args(vec![], vec![], None, vec![], b),
+  FBlockArg => p.new_args(vec![], vec![], None, vec![], b),
   None => {
     p.local_add_f(None);
     p.new_args(vec![], vec![], None, vec![], None)
@@ -1162,12 +1170,12 @@ FNormArg: Symbol = {
 };
 
 FArgItem: NodeRef = {
-  <FNormArg> => p.new_arg(<>),
+  FNormArg => p.new_arg(<>),
   "lparen" <FMargs> Rparen => p.new_masgn(<>, None),
 };
 
 FArg: Vec<NodeRef> = {
-  <FArgItem> => vec![<>],
+  FArgItem => vec![<>],
   <l:FArg> "," <a:FArgItem> => { l.push(a); l },
 };
 
@@ -1190,12 +1198,12 @@ FBlockOpt: (Symbol, NodeRef) = {
 };
 
 FBlockOptArg: Vec<(Symbol, NodeRef)> = {
-  <FBlockOpt> => vec![<>],
+  FBlockOpt => vec![<>],
   <l:FBlockOptArg> "," <b:FBlockOpt> => { l.push(b); l },
 };
 
 FOptarg: Vec<(Symbol, NodeRef)> = {
-  <FOpt> => vec![<>],
+  FOpt => vec![<>],
   <l:FOptarg> "," <o:FOpt> => { l.push(o); l }
 };
 
@@ -1236,7 +1244,7 @@ AssocList: Vec<NodeRef> = {
 };
 
 Assocs: Vec<(NodeRef, NodeRef)> = {
-  <Assoc> => vec![<>],
+  Assoc => vec![<>],
   <l:Assocs> "," <a:Assoc> => { l.push(a); l },
 };
 
@@ -1278,28 +1286,17 @@ CallOp: Symbol = {
 
 CallOp2: Symbol = { CallOp, "colon2" };
 
-OptTerms: () = {
-  None,
-  Terms
-};
-OptNl: () = {
-  None,
-  Nl
-};
-
-Rparen: () = { OptNl ")" };
-Rbracket: () = {OptNl "]" };
+Rparen: () = { Nl? ")" };
+Rbracket: () = { Nl? "]" };
 
 Trailer: () = { None, Nl, Comma };
 
 Term: () = {
-  ";", // => { yyerrtok; }
+  ";", // => { yyerrok; }
   Nl,
   HeredocBody,
 };
 
 Nl: () = { "\n" => { p.lineno++; p.column = 0; } };
-
-Terms: () = { Term, Terms Term };
 
 None: () = {};
