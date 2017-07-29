@@ -6,6 +6,7 @@ use lexer::LexerState
 use lexer::Tok;
 use lalrpop_util::ParseError;
 
+#[LALR]
 grammar<'state>(p: &mut Lexer<'state>);
 
 extern {
@@ -167,31 +168,30 @@ extern {
   }
 }
 
-pub Program: NodeRef = { TopCompstmt };
-
-TopCompstmt: NodeRef = { TopStmts };
+pub Program: NodeRef = { TopStmts };
 
 TopStmts: BeginNodeRef = {
-  None => p.new_begin(None),
-  <t:TopStmt> => p.new_begin(Some(t)),
-  <stmts:TopStmts> Term+ <t:TopStmt> Term* => { stmts.push(t); stmts },
+  <stmts:(<TopStmt> Term+)*> <t:TopStmt?> => match t {
+    Some(t) => { stmts.push(t); stmts },
+    None => stmts,
+  },
   ! <t:TopStmt> => p.new_begin(None),
 };
 
 TopStmt: NodeRef = {
   Stmt,
-  "BEGIN" "{" TopCompstmt "}" => Err("BEGIN not supported"),
+  "BEGIN" "{" TopStmts "}" => Err("BEGIN not supported"),
 };
 
 Bodystmt: NodeRef = {
-  <c:Compstmt> <r:Rescue?> <el:OptElse> <en:("ensure" <Compstmt>)?> =>
+  <c:Compstmt> <r:Rescue?> <el:Else?> <en:("ensure" <Compstmt>)?> =>
     p.new_bodystmt(c, r, el, en),
 };
 
-Compstmt: Vec<NodeRef> = { <Stmts> Term* => <> };
+Compstmt: Vec<NodeRef> = { Stmts };
 
 Stmts: Vec<NodeRef> = {
-  <res:(<Stmts> Term+)> <s:Stmt?> => match s {
+  <res:(<Stmt> Term+)*> <s:Stmt?> => match s {
     Some(s) => { res.push(s); res }
     None => res
   },
@@ -204,7 +204,7 @@ StmtNoMod: NodeRef = {
   CommandAsgn,
   "END" "{" <s:Compstmt> "}" => Err("END not supported"),
   <l:Mlhs> "=" <c:CommandCall> => p.new_masgn(l, c),
-  <l:Lhs> "=" <r:Mrhs> => p.new_asgn(l, p.new_array(r)),
+  <l: Lhs> "=" <r:Mrhs> => p.new_asgn(l, p.new_array(r)),
   <l:Mlhs> "=" <a:Arg> => p.new_masgn(l, a),
   <l:Mlhs> "=" <r:Mrhs> => p.new_masgn(l, p.new_array(r)),
   Expr,
@@ -310,18 +310,20 @@ MlhsInner: Vec<NodeRef> = {
 };
 
 MlhsBasic: (Vec<NodeRef>, Option<OptNodeRef>, Vec<NodeRef>) = {
-  <pre:(<MlhsItem> Comma)*> <n:("star" <Lhs?>)> <post:(Comma <MlhsItem>)*> => (pre, Some(n), post),
-  <l:(<MlhsItem> Comma)+> <i:MlhsItem?> => {
+  <pre:(<MlhsItem> ",")*> <n:("star" <Lhs?>)> <post:("," <MlhsItem>)*> => (pre, Some(n), post),
+  <l:(<MlhsItem> ",")+> <i:MlhsItem?> => {
     match i => { Some(i) => { l.push(i); }, _ => {} };
     (l, None, vec![])
   },
 };
 
+#[inline]
 MlhsItem: NodeRef = {
   Lhs,
   "lparen" <MlhsInner> Rparen => p.new_masgn(<>, vec![]),
 };
 
+#[inline]
 Lhs: NodeRef = {
   Variable => p.assignable(<>),
   <prim:Primary> "[" <c:OptCallArgs> Rbracket =>
@@ -528,9 +530,15 @@ Arg: NodeRef = {
 
 ArefArgs: Vec<NodeRef> = {
   None => vec![],
-  <a:Args> Trailer => a,
-  <a:Args> Comma <h:Assocs> Trailer => { a.push(p.new_hash(h)); a },
-  <h:Assocs> Trailer => { vec![p.new_hash(h)] },
+  <a:(<Arg> Comma)*> <last_a:Arg> <h:(Comma <Assoc>)*> Trailer => {
+    a.push(last_a);
+    a.push(p.new_hash(h));
+    a
+  },
+  <h:(<Assoc> ",")*> <last_h:Assoc> Trailer => {
+    h.push(last_h);
+    vec![p.new_hash(h)]
+  },
 };
 
 ParenArgs: Vec<NodeRef> = { "(" <OptCallArgs> Rparen => <> };
@@ -538,24 +546,20 @@ ParenArgs: Vec<NodeRef> = { "(" <OptCallArgs> Rparen => <> };
 OptCallArgs: Vec<NodeRef> = {
   None => vec![],
   CallArgs,
-  <Args> "," => <>,
-  <a:Args> Comma <h:Assocs> "," => { a.push(p.new_hash(h)); a },
-  <h:Assocs> "," => vec![p.new_hash(h), b],
+  <a:(<Arg> Comma)*> <h:(<Assoc> ",")+> => { a.push(p.new_hash(h)); a },
 };
 
-#[inline]
 CallArgs: Vec<NodeRef> = {
   Command => vec![<>],
-  <a:(<Args> Comma)?> <h:(<Assocs> Comma)?> <b:BlockArg> => {
+  <a:(<Arg> Comma)*> <h:(<Assoc> ",")*> <b:BlockArg> => {
     a.push(p.new_hash(h));
     match b { Some(b) => { a.push(b); }, _ => {} };
     a
   },
-  <a:(<Args> Comma)?> <h:Assocs> => {}
+  <a:(<Arg> Comma)*> <h:(<Assoc> ",")*> <last_assoc:Assoc> => {}
   <a:Args> => {}
 };
 
-// #[inline]
 CommandArgs: Vec<NodeRef> = {
   // $<stack>$ = p.cmdarg_stack;
   // CMDARG_PUSH(1);
@@ -565,15 +569,8 @@ CommandArgs: Vec<NodeRef> = {
 
 BlockArg: NodeRef = { "amper" <Arg> => p.new_block_arg(<>) };
 
-CommaBlockArg: OptNodeRef = { Comma <BlockArg> => <> };
+Comma: () = { "," HeredocBody* => () };
 
-#[inline]
-Comma: () = {
-  "," => (),
-  "," HeredocBodies => (),
-};
-
-#[inline]
 Args: Vec<NodeRef> = {
   <l:(<Arg> Comma)*> <a:Arg> => {
     p.void_expr_error(a);
@@ -586,7 +583,14 @@ Args: Vec<NodeRef> = {
 };
 
 Mrhs: Vec<NodeRef> = {
-  Args,
+  <l:(<Arg> Comma)+> <a:Arg> => {
+    p.void_expr_error(a);
+    l.push(a); l
+  },
+  <l:(<Arg> Comma)*> "star" <a:Arg> => {
+    p.void_expr_error(a);
+    l.push(p.new_splat(a)); l
+  },
 };
 
 Primary: NodeRef = {
@@ -624,17 +628,17 @@ Primary: NodeRef = {
     "end" => p.new_if(p.cond(c), s, t),
   "unless" <c:Expr> Then
     <s:Compstmt>
-    <e:OptElse>
+    <e:Else?>
     "end" => p.new_unless(p.cond(c), s, e),
   "while" // COND_PUSH(1);
     <c:Expr> Do // COND_POP();
     <s:Compstmt>
-    <e:OptElse>
+    <e:Else?>
     "end" => p.new_while(p.cond(c), s, e),
   "until" // COND_PUSH(1);
     <c:Expr> Do // COND_POP();
     <s:Compstmt>
-    <e:OptElse>
+    <e:Else?>
     "end" => p.new_until(p.cond(c), s, e),
   "case" <c:Expr> Term*
     <b:CaseBody>
@@ -698,42 +702,26 @@ Then: () = { Term, "then", Term "then" };
 Do: () = { Term, "do_cond" };
 
 IfTail: OptNodeRef = {
-  OptElse,
+  Else?,
   "elsif" <c:Expr> Then
     <s:Compstmt>
     <t:IfTail> => Some(p.new_if(p.cond(c), s, t)),
 };
 
-OptElse: OptNodeRef = {
-  None,
-  "else" <Compstmt> => Some(<>)
-};
+Else: NodeRef = { "else" <Compstmt> => Some(<>) };
 
 ForVar: Vec<NodeRef> = { Lhs => vec![<>], Mlhs };
 
 FMarg: NodeRef = {
-  FNormArg => p.new_arg(<>),
+  "ident" => p.new_arg(<>),
   "lparen" <FMargs> Rparen => p.new_masgn(<>, vec![]),
 };
 
-FMargList: Vec<NodeRef> = {
-  <l:(FMargList ",")*> <a:FMarg> => { l.push(a); l },
-};
-
 FMargs: (Vec<NodeRef>, Option<Option<NodeRef>>, Vec<NodeRef>) = {
-  FMargList => (<>, None, vec![]),
-  <l:(<FMargList> ",")?> "star" <r:FNormArg?> "," <p:("," <FMargList>)?> =>
+  <l:(FMarg ",")*> <a:FMarg> => (<>, None, vec![]),
+  <l:(<FMarg> ",")*> "star" <r:"ident"?> "," <p:("," <FMarg>)*> =>
     (match l { Some(l) => l, _ => vec![] }, Some(r),
      match p { Some(p) => p, _ => vec![] }),
-};
-
-BlockParam: NodeRef = {
-  <pre:(<FArg> ",")?> <o:(<FBlockOptArg> ",")?> <r:FRestArg> <post:("," FArg)?> <b:FBlockArgComma?> =>
-    p.new_args(pre, o, r, post, b),
-  <pre:(<FArg> ",")?> <o:FBlockOptArg> <b:FBlockArgComma?> =>
-    p.new_args(pre, o, r, post, b),
-  <pre:FArg> <b:FBlockArgComma?> =>
-    p.new_args(pre, None, None, None, None),
 };
 
 OptBlockParam: OptNodeRef = {
@@ -745,25 +733,22 @@ OptBlockParam: OptNodeRef = {
 };
 
 BlockParamDef: NodeRef = {
-  "|" OptBvDecl "|" => None,
   "||" => None,
-  "|" <BlockParam> OptBvDecl "|" => Some(<>),
+  "|" <b:FArgs> <v:Bvars?> "|" => Some(b),
 };
 
-OptBvDecl: () = { Nl?, Nl? ";" BvDecls Nl? };
-
-BvDecls: () = { Bvar, BvDecls "," Bvar };
+Bvars: () = { Nl? ";" <l:(Bvar ",")*> <v:Bvar> Nl? => {} };
 
 Bvar: () = {
   <"ident"> => {
     p.local_add_f(<>);
     p.new_bv(<>);
   },
-  FBadArg,
+  // FBadArg,
 };
 
 FLarglist: Vec<NodeRef> = {
-  "(" <FArgs> OptBvDecl ")" => <>,
+  "(" <FArgs> Bvars? ")" => <>,
   FArgs,
 };
 
@@ -841,7 +826,7 @@ CaseBody: (OptNodeRef, NodeRef, OptNodeRef) = {
 };
 
 Cases: (OptNodeRef, NodeRef, OptNodeRef) = {
-  OptElse => (None, s, None),
+  Else? => (None, <>, None),
   CaseBody,
 };
 
@@ -878,7 +863,7 @@ StringInterp: Vec<NodeRef> = {
       vec![part, s],
     },
   "literal_delim" => vec![p.new_literal_delim()],
-  "hd_literal_delim"  HeredocBodies => vec![p.new_literal_delim()],
+  "hd_literal_delim"  HeredocBody+ => vec![p.new_literal_delim()],
 };
 
 Xstring: NodeRef = {
@@ -896,18 +881,13 @@ Regexp: NodeRef = {
 
 Heredoc: () = { "heredoc_beg" };
 
-HeredocBodies: () = { HeredocBody+ };
-
 HeredocBody: () = {
-  "heredoc_end" => {
-    let inf = p.parsing_hereodc_inf();
+  HeredocStringInterp* "heredoc_end" => {
+    let inf = p.parsing_heredoc_inf();
     inf.doc.push(p.new_str(""));
     p.heredoc_end();
   },
-  HeredocStringRep "heredoc_end" => { p.heredoc_end(); },
 };
-
-HeredocStringRep: () = { HeredocStringInterp+ };
 
 HeredocStringInterp: () = {
   <"hd_string_mid"> => {
@@ -958,7 +938,6 @@ Symbols: NodeRef = {
   },
 };
 
-#[inline]
 Numeric: NodeRef = {
   "integer",
   "float",
@@ -1010,64 +989,39 @@ FArglist: NodeRef = {
 };
 
 FArgs: NodeRef = {
-  <pre:(<FArg> ",")?> <o:(<FOptarg> ",")?> <r:FRestArg> <post:("," <FArg>)?> <b:FBlockArgComma?> =>
+  <pre:(<FArgItem> ",")*> <o:(<FOpt> ",")*> <r:FRestArg>
+    <post:("," <FArgItem>)*> <post_opt:("," <FOpt>)*> <b:("," <FBlockArg>)?> =>
     p.new_args(pre, o, r, post, b),
-  <pre:FArg> <o:("," <FOptarg>)?> <b:FBlockArgComma?> =>
-    p.new_args(pre, o, r, post, None),
-  None => p.new_args(vec![], vec![], None, vec![], None)
-};
-
-FBadArg: () = {
-  "const" => Err("formal argument cannot be a constant"),
-  "ivar" => Err("formal argument cannot be a instace variable"),
-  "gvar" => Err("formal argument cannot be a global variable"),
-  "cvar" => Err("formal argument cannot be a class variable"),
-};
-
-FNormArg: Symbol = {
-  FBadArg,
-  <"ident"> => {
-    p.local_add_f(<>);
-    <>
+  <pre:(<FArgItem> ",")*> <o:(FOpt ",")*> <o_last:FOpt> <b:("," <FBlockArg>)?> => {
+    pre.push(last_pre);
+    p.new_args(pre, o, None, vec![], b)
   },
+  <pre:(<FArgItem> ",")*> <last_pre:FArgItem> <b:("," <FBlockArg>)?> => {
+    pre.push(last_pre);
+    p.new_args(pre, o, None, vec![], b)
+  },
+  FBlockArg? => p.new_args(vec![], vec![], None, vec![], <>)
 };
+
+// FBadArg: () = {
+//   "const" => Err("formal argument cannot be a constant"),
+//   "ivar" => Err("formal argument cannot be a instace variable"),
+//   "gvar" => Err("formal argument cannot be a global variable"),
+//   "cvar" => Err("formal argument cannot be a class variable"),
+// };
 
 FArgItem: NodeRef = {
-  FNormArg => p.new_arg(<>),
+  "ident" => p.new_arg(<>),
   "lparen" <FMargs> Rparen => p.new_masgn(<>, None),
 };
 
-FArg: Vec<NodeRef> = {
-  FArgItem => vec![<>],
-  <l:FArg> "," <a:FArgItem> => { l.push(a); l },
-};
-
-FOptAsgn: Symbol = {
-  <"ident"> "=" => { p.local_add_f(<>); <> },
-};
-
+#[inline]
 FOpt: (Symbol, NodeRef) = {
-  <o:FOptAsgn> <a:Arg> => {
+  <o:"ident"> "=" <a:Arg> => {
     p.void_expr_error(a);
     (o, a)
   },
-};
-
-FBlockOpt: (Symbol, NodeRef) = {
-  <o:FOptAsgn> <v:Primary> => {
-    p.void_expr_error(v);
-    (o, v)
-  },
-};
-
-FBlockOptArg: Vec<(Symbol, NodeRef)> = {
-  FBlockOpt => vec![<>],
-  <l:FBlockOptArg> "," <b:FBlockOpt> => { l.push(b); l },
-};
-
-#[inline]
-FOptarg: Vec<(Symbol, NodeRef)> = {
-  <l:(<FOpt> ",")*> <o:FOpt> => { l.push(o); l }
+  // <o:FOptAsgn> <a:Primary>
 };
 
 RestargMark: () = { "*", "star" };
@@ -1083,10 +1037,6 @@ FBlockArg: Symbol = {
   BlkargMark <"ident"> => { p.local_add_f(<>); <> }
 };
 
-FBlockArgComma: Symbol = {
-  "," <FBlockArg> => <>,
-};
-
 Singleton: NodeRef = {
   VarRef,
   SingletonParen <Expr> Rparen => match <>.node_type() => {
@@ -1099,11 +1049,6 @@ Singleton: NodeRef = {
 };
 
 SingletonParen: () = { "(" => { p.lstate = LexerState::BEG; } };
-
-#[inline]
-Assocs: Vec<(NodeRef, NodeRef)> = {
-  <l:(<Assoc> ",")*> <a:Assoc> => { l.push(a); l },
-};
 
 Assoc: NodeRef = {
   <k:Arg> "=>" <v:Arg> => {
@@ -1130,11 +1075,8 @@ Assoc: NodeRef = {
   },
 };
 
-#[inline]
 Operation: Symbol = { "ident", "const", "fid" };
-#[inline]
 Operation2: Symbol = { "ident", "const", "fid", Op };
-#[inline]
 Operation3: Symbol = { "ident", "fid", Op };
 
 DotOrColon: () = { ".", "colon2" };
