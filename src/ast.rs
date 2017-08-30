@@ -111,23 +111,23 @@ pub trait Node {
   fn nd_type(&self) -> NodeType;
   fn children(&self) -> Vec<Rc<RefCell<Node>>>;
 
-  pub fn line(&self) -> u32;
+  fn line(&self) -> u32;
   fn set_line(&mut self);
 
-  pub fn column(&self) -> u32;
+  fn column(&self) -> u32;
   fn set_column(&mut self);
 
-  pub fn file(&self) -> &str;
+  fn file(&self) -> &str;
   fn set_file(&mut self);
 
-  fn set_source_location(&mut self, &Node src) {
+  fn set_source_location(&mut self, src: &mut Node) {
     self.set_line(src.line());
     self.set_column(src.column());
     self.set_file(src.file());
   }
 }
 
-type NodeRef = Box<RefCell<Node>>>;
+type NodeRef = Box<RefCell<Node>>;
 type OptNodeRef = Option<NodeRef>;
 
 pub struct Local {
