@@ -1,4 +1,4 @@
-euse ast::NodeRef;
+use ast::NodeRef;
 use ast::OptNodeRef;
 use ast::CpathType;
 use lexer::Lexer;
@@ -750,48 +750,45 @@ fn exc_list<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char
     .parse_stream(i)
 }
 
-fn literal<I>(i: I) -> ParseResult<Symbol, I> where I: Stream<Item = char> {
-  Numeric, Symbol, Words, Symbols
-};
-
-fn String<I>(i: I) -> ParseResult<String, I> where I: Stream<Item = char> {
-  "char", "string",
-  "string_beg" <"string"> => <>,
-  "string_beg" stringrep <s:"string"> => {
-    r.push(s);
-    p.new_dstr(r)
-  },
+fn literal<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  parser(numeric)
+    .or(symbol)
+    .or(words)
+    .or(symbols)
+    .parse_stream(i)
 }
 
-fn StringRep<I>(i: I) -> ParseResult<StringRep, I> where I: Stream<Item = char> { StringInterp+ };
-
-fn StringInterp<I>(i: I) -> ParseResult<StringInterp, I> where I: Stream<Item = char> {
-  <"string_mid"> => vec![<>],
-  <part:"string_part"> // $<nd>$ = p.lex_strterm; p.lex_strterm = None;
-    compstmt "}" => {
-      p.lex_strterm = $<nd>2;
-      vec![part, s],
-    },
-  "literal_delim" => vec![p.new_literal_delim()],
-  "hd_literal_delim"  HeredocBody+ => vec![p.new_literal_delim()],
+fn string<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  parser(char_token)
+    .or(string_token)
+    .or((string_beg, many(string_interp), string_token)
+        .map(|_, r, s| { r.push(s); new_dstr(r) }))
+    .parse_stream(i)
 }
 
-fn Xstring<I>(i: I) -> ParseResult<Xstring, I> where I: Stream<Item = char> {
-  "xstring_beg" <"xstring"> => <>,
-  "xstring_beg" stringrep <s:"xstring"> => {
-    r.push(s);
-    p.new_dxstr(r)
-  },
+fn string_interp<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char> {
+  (string_mid).map(|v| vec![v])
+    .or((string_part, compstmt, token('}')).map(|p, s, _| vec![p, s]))
+    .or((literal_delim).map(|v| vec![new_literal_delim()]))
+    .or((hd_literal_delim, heredoc_body).map(|v| vec![new_literal_delim()]))
+    .parse_stream(i)
 }
 
-fn Regexp<I>(i: I) -> ParseResult<Regexp, I> where I: Stream<Item = char> {
-  "regexp_beg" <"regexp"> => <>,
-  "regexp_beg" stringrep <rgx:"regexp"> => p.new_dregx(r, rgx),
+fn xstring<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  (xstring_beg, xstring_token).map(|_, v| v)
+    .or((xstring_beg, many(string_interp), xstring_token)
+        .map(|_, r, s| { r.push(s); new_dxstr(r) }))
+    .parse_stream(i)
+}
+
+fn regexp<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  regexp_beg <"regexp"> => <>,
+  "regexp_beg" many(string_interp) <rgx:"regexp"> => p.new_dregx(r, rgx),
 }
 
 fn Heredoc<I>(i: I) -> ParseResult<Heredoc, I> where I: Stream<Item = char> { "heredoc_beg" };
 
-fn HeredocBody<I>(i: I) -> ParseResult<HeredocBody, I> where I: Stream<Item = char> {
+fn HeredocBody<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
   HeredocStringInterp* "heredoc_end" => {
     let inf = p.parsing_heredoc_inf();
     inf.doc.push(p.new_str(""));
@@ -816,14 +813,14 @@ fn HeredocStringInterp<I>(i: I) -> ParseResult<HeredocStringInterp, I> where I: 
 
 fn Words<I>(i: I) -> ParseResult<Words, I> where I: Stream<Item = char> {
   "words_beg" <"string"> => { p.new_words(vec![<>]) },
-  "words_beg" stringrep <s:"string"> => {
+  "words_beg" many(string_interp) <s:"string"> => {
     r.push(s);  p,new_words(r)
   },
 }
 
 fn Symbol<I>(i: I) -> ParseResult<Symbol, I> where I: Stream<Item = char> {
   BasicSymbol => p.new_sym(<>),
-  "symbeg" "string_beg" stringrep <s:"string"> => {
+  "symbeg" "string_beg" many(string_interp) <s:"string"> => {
     p.lstate = LexerState::END;
     r.push(s);
     p.new_dsym(r)
@@ -842,7 +839,7 @@ Sym: Symbol = {
 
 fn Symbols<I>(i: I) -> ParseResult<Symbols, I> where I: Stream<Item = char> {
   "symbols_beg" <"string"> => p.new_symbols(vec![<>]),
-  "symbols_beg" stringrep <s:"string"> => {
+  "symbols_beg" many(string_interp) <s:"string"> => {
     r.push(s);
     p.new_symbols(r)
   },
@@ -957,11 +954,7 @@ fn assoc<I>(i: I) -> ParseResult<NodeRef, I> {
     p.void_expr_error(v);
     (p.new_sym(k), v)
   },
-  string_beg <k:label_end> arg => {
-    p.void_expr_error(v);
-    (p.new_sym(k), v)
-  },
-  string_beg stringrep <l:label_end> arg => {
+  string_beg many(string_interp) <l:label_end> arg => {
     p.void_expr_error(v);
     s.push(l);
     (p.new_dsym(s), v)
