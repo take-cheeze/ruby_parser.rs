@@ -782,62 +782,57 @@ fn xstring<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
 }
 
 fn regexp<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
-  regexp_beg <"regexp"> => <>,
-  "regexp_beg" many(string_interp) <rgx:"regexp"> => p.new_dregx(r, rgx),
+  (regexp_beg, regexp_token).map(|_, v| v)
+    .or(regexp_beg, many(string_interp), regexp_token).map(|_, r, rgx| new_dregx(r, rgx))
+    .parse_stream(i)
 }
 
-fn Heredoc<I>(i: I) -> ParseResult<Heredoc, I> where I: Stream<Item = char> { "heredoc_beg" };
-
-fn HeredocBody<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
-  HeredocStringInterp* "heredoc_end" => {
-    let inf = p.parsing_heredoc_inf();
-    inf.doc.push(p.new_str(""));
-    p.heredoc_end();
-  },
+fn heredoc<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  heredoc_beg.parse_stream(i)
 }
 
-fn HeredocStringInterp<I>(i: I) -> ParseResult<HeredocStringInterp, I> where I: Stream<Item = char> {
-  <"hd_string_mid"> => {
-    let inf = p.parsing_heredoc_inf();
-    inf.doc.push(p.new_str(<>));
-    p.herdoc_treat_nextline();
-  },
-  <s:"hd_start_part"> // $<nd>$ = p.lex_strterm; p.lex_strterm = NULL;
-    compstmt "}" => {
-      let inf = p.parsing_heredoc_inf();
-      p.lex_strterm = $<nd>2;
-      inf.doc.push(s);
-      inf.doc.push(c);
-    },
+fn heredoc_body<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  (many(HeredocStringInterp), heredoc_end)
+    .parse_stream(i)
 }
 
-fn Words<I>(i: I) -> ParseResult<Words, I> where I: Stream<Item = char> {
-  "words_beg" <"string"> => { p.new_words(vec![<>]) },
-  "words_beg" many(string_interp) <s:"string"> => {
-    r.push(s);  p,new_words(r)
-  },
+fn heredoc_string_interp<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  (hd_string_mid)
+    .or((hd_start_part, compstmt, token('}')))
+    .parse_stream(i)
 }
 
-fn Symbol<I>(i: I) -> ParseResult<Symbol, I> where I: Stream<Item = char> {
-  BasicSymbol => p.new_sym(<>),
-  "symbeg" "string_beg" many(string_interp) <s:"string"> => {
-    p.lstate = LexerState::END;
-    r.push(s);
-    p.new_dsym(r)
-  },
+fn words<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  (words_beg, string).map(|_, v| new_words(vec![<>]))
+    .or(words_beg, many(string_interp), string)
+    .parse_stream(i)
 }
 
-BasicSymbol: Symbol = {
-  "symbeg" <Sym> => { p.lstate = LexerState::END; <> },
+fn symbol<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  (basic_symbol).map(|v| new_sym(v))
+    .or((symbeg, string_beg, many(string_interp), string).map(|_, _, r, s| {
+      r.push(s);
+      new_dsym(r)
+    }))
+    .parse_stream(i)
 }
 
-Sym: Symbol = {
-  Fname, "ivar", "gvar", "cvar",
-  <"string"> => Symbol::from(<>),
-  "string_beg" <"string"> => Symbol::from(<>),
+fn basic_symbol<I>(i: I) -> ParseResult<Symbol, I> where I: Stream<Item = char> {
+  (symbeg, sym).map(|_, v| v)
+    .parse_stream(i)
 }
 
-fn Symbols<I>(i: I) -> ParseResult<Symbols, I> where I: Stream<Item = char> {
+fn sym<I>(i: I) -> ParseResult<Symbol, I> where I: Stream<Item = char> {
+  fname
+    .or(ivar)
+    .or(gvar)
+    .or(cvar)
+    .or((string).map(|v| Symbol::from(v)))
+    .or((string_beg, string).map(|_, v| Symbol::from(v)))
+    .parse_stream(i)
+}
+
+fn symbols<I>(i: I) -> ParseResult<Vec<Symbol>, I> where I: Stream<Item = char> {
   "symbols_beg" <"string"> => p.new_symbols(vec![<>]),
   "symbols_beg" many(string_interp) <s:"string"> => {
     r.push(s);
@@ -859,9 +854,9 @@ fn variable<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
     .parse_stream(i)
 }
 
-fn VarLhs<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> { Variable => p.assignable(<>) };
+fn var_lhs<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> { Variable => p.assignable(<>) };
 
-fn VarRef<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+fn var_ref<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
   variable.map(|_| var_reference())
     .or(string("nil").map(|_| new_nil()))
     .or(string("self").map(|_| new_self()))
