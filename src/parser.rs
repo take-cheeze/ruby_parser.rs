@@ -833,20 +833,18 @@ fn sym<I>(i: I) -> ParseResult<Symbol, I> where I: Stream<Item = char> {
 }
 
 fn symbols<I>(i: I) -> ParseResult<Vec<Symbol>, I> where I: Stream<Item = char> {
-  "symbols_beg" <"string"> => p.new_symbols(vec![<>]),
-  "symbols_beg" many(string_interp) <s:"string"> => {
-    r.push(s);
-    p.new_symbols(r)
-  },
+  (symbols_beg, string).map(|_, v| new_symbols(vec![v]))
+    .or((symbols_beg, many(string_interp), string).map(|_, r, s| {
+      r.push(s);
+      new_symbols(r)
+    }))
+    .parse_stream(i)
 }
 
-Numeric: NodeRef = {
-  "integer",
-  "float",
-  "uminus_num" <"integer"> // %prec "lowest"
-    => p.negate_lit(<>),
-  "uminus_num" <"float"> // %prec "lowest"
-    => p.negate_lit(<>),
+fn numeric<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  (integer_token)
+    .or(float_token)
+    .or((token('-'), integer_token.or(float_token)).map(|_, v| negate_lit(v)))
 }
 
 fn variable<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
@@ -854,7 +852,10 @@ fn variable<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
     .parse_stream(i)
 }
 
-fn var_lhs<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> { Variable => p.assignable(<>) };
+fn var_lhs<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  variable
+    .parse_stream(i)
+}
 
 fn var_ref<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
   variable.map(|_| var_reference())
@@ -862,32 +863,42 @@ fn var_ref<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
     .or(string("self").map(|_| new_self()))
     .or(string("true").map(|_| new_true()))
     .or(string("false").map(|_| new_false()))
-    .or(string("__FILE__").map(|_| new_str(<>)))
+    .or(string("__FILE__").map(|_| new_str()))
     .or((postion(), string("__LINE__")).map(|pos, _| new_int(pos.line)))
     .parse_stream(i)
 }
 
-fn Backref<I>(i: I) -> ParseResult<Backref, I> where I: Stream<Item = char> { "nth_ref", "back_ref", };
-
-fn Superclass<I>(i: I) -> ParseResult<Superclass, I> where I: Stream<Item = char> {
-  Term => None,
-  SuperclassSymbol <Expr> Term => <>,
+fn backref<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  nth_ref
+    .or(back_ref)
+    .parse_stream(i)
 }
 
-fn SuperclassSymbol<I>(i: I) -> ParseResult<SuperclassSymbol, I> where I: Stream<Item = char> {
-  "<" => { p.lstate = LexerState::BEG; p.cmd_start = true; }
+fn superclass<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  (token('<'), opt_ws_nl, expr, term).map(|_, _, e, _| e)
+    .parse_stream(i)
 }
 
-fn Farglist<I>(i: I) -> ParseResult<Farglist, I> where I: Stream<Item = char> {
-  "(" <Fargs> Rparen => {
-    p.lstate = LexerState::BEG;
-    p.cmd_start = true;
-    <>
+fn farglist<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char> {
+  (token('('), opt_ws_nl, fargs, opt_ws_nl, rparen).map(|_, _, v, _, _| v)
+    .or((fargs, term).map(|_, v| v))
+    .parse_stream(i)
+}
+
+fn fargs<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char> {
+  fargs = FargsTemp<FOpt>;
+  <pre:(<FargItem> ",")*> <o:(<Opt> ",")*> frestarg <post:("," <FargItem>)+> <b:("," <FBlockarg>)?> =>
+    p.new_args(pre, o, r, post, b),
+  <pre:(<FargItem> ",")+> <o:(<Opt> ",")*> <last_o:Opt> <b:("," <FBlockarg>)?> => {
+    o.push(last_o);
+    p.new_args(pre, o, r, vec![], b)
   },
-  <Fargs> Term => <>,
+  <pre:(<FargItem> ",")*> <last_pre:FargItem> <b:("," <FBlockarg>)?> => {
+    pre.push(last_pre);
+    p.new_args(pre, o, r, vec![], b)
+  },
+  FBlockarg? => p.new_args(vec![], vec![], None, vec![], <>)
 }
-
-Fargs = FargsTemp<FOpt>;
 BlockParam = FargsTemp<BOpt>;
 
 FargsTemp<Opt>: NodeRef = {
