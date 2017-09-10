@@ -6,4 +6,8 @@ authors = ["take_cheeze <takechi101010@gmail.com>"]
 [dependencies]
 regex = "0.2.1"
 string_cache = "0.6"
-combine = '2.4.0'
+lazy_static = "0.2"
+
+[dependencies.combine]
+version = '2.5.1'
+features = ['regex']

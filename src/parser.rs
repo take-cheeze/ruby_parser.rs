@@ -1,14 +1,17 @@
 use ast::NodeRef;
 use ast::NodeImpl;
 use ast::Type;
-use ::Symbol;
-
 use ast::OptNodeRef;
 use ast::CpathType;
 use ast::Type;
 
+use ::Symbol;
+
 use combine::*;
 use combine::range::range;
+use combine::regex::match_;
+
+use regex::Regex;
 
 macro_rules! nd {
   ($name:ident) => (
@@ -39,6 +42,22 @@ fn ws_nl<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
 
 fn opt_ws_nl<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
   many(one_of(" \t\x0c\r\x5c").or(nl)).parse_stream(i)
+}
+
+fn ident<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
+  lazy_static! { static ref IDENT: Regex = Regex::new(r"[a-z][a-zA-Z0-9_]*[\!\?]?").unwrap(); }
+  (match_(IDENT)).map(|v| Symbol::from(v))
+    .parse_stream(i)
+}
+
+fn constant<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
+  lazy_static! { static ref CONST: Regex = Regex::new(r"[A-Z][a-zA-Z0-9_]*").unwrap(); }
+  (match_(CONST)).map(|v| Symbol::from(v))
+    .parse_stream(i)
+}
+
+fn call_uni_op(recv: NodeRef, op: &str) -> NodeRef {
+  nd!(CALL, recv, Symbol::from(op))
 }
 
 fn top_stmts<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char>
@@ -74,11 +93,6 @@ fn stmts<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char> {
 fn assign_op<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
   (opt_ws_nl, token('='), opt_ws_nl)
     .map(|_, _, _| ())
-    .parse_stream(i)
-}
-
-fn undef_list<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char> {
-  sep_by(fsym, (opt_ws, token(','), opt_ws_nl))
     .parse_stream(i)
 }
 
@@ -173,7 +187,7 @@ fn expr<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
   parser(command_call)
     .or(command_call)
     .or(expr_and_or)
-    .or((string("!"), opt_ws_nl, commandcall).map(|_, _, c| call_uni_op(c, "!")))
+    .or((string("!"), opt_ws_nl, command_call).map(|_, _, c| call_uni_op(c, "!")))
     .parse_stream(i)
 }
 
@@ -181,15 +195,15 @@ fn command_call<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char>
   parser(command).or(block_command).parse_stream(i)
 }
 
-fn BlockCommand<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+fn block_command<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
   parser(block_call)
     .or((block_call, call_op2, operation2, ws, command_args)
         .map(|b, c, o, _, args| nd!(CALL, b, c, o, args)))
     .parse_stream(i)
 }
 
-fn Command<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
-  (operation, wp, command_args).map(|op, _, c| nd!(FCALL, op, c))
+fn command<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  (operation, ws, command_args).map(|op, _, c| nd!(FCALL, op, c))
     .or((primary, call_op, operation2, ws, command_args)
         .map(|prim, c_op, op, _, c| nd!(CALL, prim, op, c, c_op)))
     .or((primary, opt_ws, "::", opt_ws_nl, operation2, command_args)
@@ -197,9 +211,9 @@ fn Command<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
     .or((string("super"), ws_nl, command_args).map(|_, _, c| nd!(SUPER, c)))
     .or((string("yieldr"), ws_nl, command_args).map(|_, _, c| nd!(YIELD, c)))
     .or((string("super"), ws_nl, command_args).map(|_, _, c| nd!(SUPER, c)))
-    .or((string("return"), ws_nl, call_args).map(|_, _, c| nd!(RETURN, ret_args(c))))
-    .or((string("break"), ws_nl, call_args).map(|_, _, c| nd!(BREAK, ret_args(c))))
-    .or((string("next"), ws_nl, call_args).map(|_, _, c| nd!(NEXT, ret_args(c))))
+    .or((string("return"), ws_nl, call_args).map(|_, _, c| nd!(RETURN, c)))
+    .or((string("break"), ws_nl, call_args).map(|_, _, c| nd!(BREAK, c)))
+    .or((string("next"), ws_nl, call_args).map(|_, _, c| nd!(NEXT, c)))
 }
 
 fn mlhs<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
@@ -230,7 +244,7 @@ fn mlhs_item<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
 }
 
 fn lhs<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
-  variable.map(|v| assignable(v))
+  variable.map(|v| v)
     .or((primary, opt_ws, token('['), opt_ws, opt_call_args, ws, rbracket)
         .map(|prim, _, _, c, _, _| nd!(CALL, prim, Symbol::from("[]"), c, Symbol::from("."))))
     .or((primary, opt_ws_nl, call_op, opt_ws_nl, ident)
@@ -242,7 +256,7 @@ fn lhs<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
     .or((primary, opt_ws_nl, string("::"), opt_ws_nl, constant)
         .map(|prim, _, c, _, id| nd!(CALL, prim, id, vec![], Symbol::from("::"))))
     .or((string("::"), opt_ws_nl, constant)
-        .map(|_, _, id| p.new_colon3(id)))
+        .map(|_, _, id| nd!(COLON3, id)))
     .parse_stream(i)
 }
 
@@ -268,7 +282,7 @@ fn fsym<I>(i: I) -> ParseResult<Symbol, I> where I: Stream<Item = char> {
     .parser_stream(i)
 }
 
-fn UndefList<I>(i: I) -> ParseResult<Vec<Symbol>, I> where I: Stream<Item = char> {
+fn undef_list<I>(i: I) -> ParseResult<Vec<Symbol>, I> where I: Stream<Item = char> {
   sep_by(fsym, (opt_ws, token(','), opt_ws_nl))
     .parse_stream(i)
 }
@@ -495,12 +509,12 @@ fn paren_args<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = ch
 }
 
 fn opt_call_args<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char> {
-  (callargs, optional(comma_hd))
+  (call_args, optional(comma_hd))
     .map(|args, _| args)
     .parse_stream(i)
 }
 
-fn callargs<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+fn call_args<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
   parser(command).map(|v| vec![v])
     .or((sep_by1(arg, comma_hd),
          optiona((comma_hd, token('*'), arg).map(|_, _, sp| nd!(SPLAT, sp))),
@@ -581,8 +595,8 @@ fn primary<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
                                     optional(expr)))
         .map(|_, _, e| p.call_uni_op(match e { Some(e) => e, None => nd!(NIL) },
                                      Symbol::from("!"))))
-    .or((operation, opt_ws_nl, braceblock).map(|op, _, b| nd!(FCALL, op, b)))
-    .or((method_call, opt_ws_nl, braceblock).map(|op, _, b| call_with_block(op, b)))
+    .or((operation, opt_ws_nl, brace_block).map(|op, _, b| nd!(FCALL, op, b)))
+    .or((method_call, opt_ws_nl, brace_block).map(|op, _, b| call_with_block(op, b)))
     .or(method_call)
     .or((string("->"), opt_ws_nl, flarglist, opt_ws_nl, lambdabody)
         .map(|_, _, a, _, b| nd!(LAMBDA, a, b)))
@@ -711,7 +725,7 @@ fn block_call<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
     .or((block_call, opt_ws_nl, call_op2, opt_ws_nl, operation2, optional(paren_args))
         .map(|b, _, c_op, _, op, a| nd!(CALL, b, op, a, c_op)))
     .or((block_call, opt_ws_nl, call_op2, opt_ws_nl, operation2, optional(paren_args),
-         opt_ws_nl, braceblock)
+         opt_ws_nl, brace_block)
         .map(|b, _, c_op, _, op, a, _, br| call_with_block(nd!(CALL, b, op, a, c_op))), br)
     .or((block_call, opt_ws_nl, call_op2, opt_ws_nl, operation2, optional(paren_args),
          opt_ws_nl, do_block)
