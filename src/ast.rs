@@ -1,6 +1,4 @@
-use ::tokenizer;
-
-enum NodeType {
+enum Type {
   METHOD,
   FBODY,
   CFUNC,
@@ -105,20 +103,23 @@ enum NodeType {
   LITERAL_DELIM,
   WORDS,
   SYMBOLS,
+  BODY_STMT
 }
 
+type NodeRef = Box<Node>;
+type OptNodeRef = Option<NodeRef>;
+
 pub trait Node {
-  fn nd_type(&self) -> NodeType;
-  fn children(&self) -> Vec<Rc<RefCell<Node>>>;
-
-  fn line(&self) -> u32;
-  fn set_line(&mut self);
-
-  fn column(&self) -> u32;
-  fn set_column(&mut self);
+  fn node_type(&self) -> Type;
+  fn children(&self) -> &Vec<NodeRef>;
 
   fn file(&self) -> &str;
+  fn line(&self) -> u32;
+  fn column(&self) -> u32;
+
   fn set_file(&mut self);
+  fn set_line(&mut self);
+  fn set_column(&mut self);
 
   fn set_source_location(&mut self, src: &mut Node) {
     self.set_line(src.line());
@@ -127,16 +128,33 @@ pub trait Node {
   }
 }
 
-type NodeRef = Box<RefCell<Node>>;
-type OptNodeRef = Option<NodeRef>;
-
-pub struct Local {
-  pub name: String,
-  pub is_const: bool,
+struct NodeImpl {
+  node_type_: Type,
+  children_: Vec<NodeRef>,
+  file_: String,
+  line_: u32,
+  column_: u32,
 }
 
-pub struct Begin {
-  
+impl NodeImpl {
+  fn new(t: Type, c: Vec<NodeRef>) -> NodeRef {
+    Box::new(NodeImpl { node_type_: t, children_: c,
+                        file_: "", line_: 0, column_: 0 })
+  }
 }
 
-enum CpathType { Absolute, Relative, Expression(NodeRef) }
+impl Node for NodeImpl {
+  fn node_type(&self) -> Type { self.node_type }
+  fn children(&self) -> &Vec<NodeRef> { self.children_; }
+
+  fn file(&self) -> &str { self.file_.str() }
+  fn line(&self) -> u32 { self.line_ }
+  fn column(&self) -> u32 { self.column_ }
+
+  fn set_file(&mut self) {}
+  fn set_line(&mut self) {}
+  fn set_column(&mut self) {}
+}
+
+
+pub enum CpathType { Absolute, Relative, Expression(NodeRef) }
