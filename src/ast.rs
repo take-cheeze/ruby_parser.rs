@@ -1,4 +1,4 @@
-enum Type {
+pub enum Type {
   METHOD,
   FBODY,
   CFUNC,
@@ -106,8 +106,8 @@ enum Type {
   BODY_STMT
 }
 
-type NodeRef = Box<Node>;
-type OptNodeRef = Option<NodeRef>;
+pub type NodeRef = Box<Node>;
+pub type OptNodeRef = Option<NodeRef>;
 
 pub trait Node {
   fn node_type(&self) -> Type;
@@ -144,8 +144,8 @@ impl NodeImpl {
 }
 
 impl Node for NodeImpl {
-  fn node_type(&self) -> Type { self.node_type }
-  fn children(&self) -> &Vec<NodeRef> { self.children_; }
+  fn node_type(&self) -> Type { self.node_type_ }
+  fn children(&self) -> &Vec<NodeRef> { self.children_ }
 
   fn file(&self) -> &str { self.file_.str() }
   fn line(&self) -> u32 { self.line_ }
@@ -156,5 +156,32 @@ impl Node for NodeImpl {
   fn set_column(&mut self) {}
 }
 
+pub struct LiteralNode<T> {
+  node_type_: Type,
+  vaiue: T,
+  file_: String,
+  line_: u32,
+  column_: u32,
+}
+
+impl<T> LiteralNode<T> {
+  fn new(t: Type, v: T) -> NodeRef {
+    Box::new(LiteralNode { node_type_: t, value: v,
+                           file_: "", line_: 0, column_: 0 })
+  }
+}
+
+impl<T> Node for LiteralNode<T> {
+  fn node_type(&self) -> Type { self.node_type_ }
+  fn children(&self) -> &Vec<NodeRef> { vec![] }
+
+  fn file(&self) -> &str { self.file_.str() }
+  fn line(&self) -> u32 { self.line_ }
+  fn column(&self) -> u32 { self.column_ }
+
+  fn set_file(&mut self) {}
+  fn set_line(&mut self) {}
+  fn set_column(&mut self) {}
+}
 
 pub enum CpathType { Absolute, Relative, Expression(NodeRef) }

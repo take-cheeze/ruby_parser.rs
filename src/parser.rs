@@ -3,7 +3,6 @@ use ast::NodeImpl;
 use ast::Type;
 use ast::OptNodeRef;
 use ast::CpathType;
-use ast::Type;
 
 use ::Symbol;
 
@@ -30,34 +29,71 @@ pub fn program<I>(i: I) -> ParseResult<NodeRef, I>
 fn str2symbol(v: &str) -> Symbol { Symbol::from(v) }
 
 fn ws<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
-  many1(one_of(" \t\x0c\r\x5c")).parse_stream(i)
+  many1(one_of(" \t\x0c\r\x5c".chars())).parse_stream(i)
 }
 fn opt_ws<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
-  many(one_of(" \t\x0c\r\x5c")).parse_stream(i)
+  many(one_of(" \t\x0c\r\x5c".chars())).parse_stream(i)
 }
 
 fn ws_nl<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
-  many1(one_of(" \t\x0c\r\x5c").or(nl)).parse_stream(i)
+  many1(one_of(" \t\x0c\r\x5c".chars()).or(nl)).parse_stream(i)
 }
 
 fn opt_ws_nl<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
-  many(one_of(" \t\x0c\r\x5c").or(nl)).parse_stream(i)
+  many(one_of(" \t\x0c\r\x5c".chars()).or(nl)).parse_stream(i)
+}
+
+fn comma<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
+  ((opt_ws, token(','), opt_ws_nl, optional((heredoc_body, opt_ws_nl))))
+    .parse_stream(i)
 }
 
 fn ident<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
-  lazy_static! { static ref IDENT: Regex = Regex::new(r"[a-z][a-zA-Z0-9_]*[\!\?]?").unwrap(); }
+  lazy_static! { static ref IDENT: Regex = Regex::new(r"[_a-z][a-zA-Z0-9_]*").unwrap(); }
+  (match_(IDENT)).map(|v| Symbol::from(v))
+    .parse_stream(i)
+}
+
+fn cvar<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
+  lazy_static! { static ref IDENT: Regex = Regex::new(r"@@[_a-zA-Z][a-zA-Z0-9_]*").unwrap(); }
+  (match_(IDENT)).map(|v| Symbol::from(v))
+    .parse_stream(i)
+}
+
+fn ivar<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
+  lazy_static! { static ref IDENT: Regex = Regex::new(r"@[_a-zA-Z][a-zA-Z0-9_]*").unwrap(); }
+  (match_(IDENT)).map(|v| Symbol::from(v))
+    .parse_stream(i)
+}
+
+fn gvar<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
+  lazy_static! { static ref IDENT: Regex = Regex::new(r"\$[_a-zA-Z][a-zA-Z0-9_]*").unwrap(); }
+  (match_(IDENT)).map(|v| Symbol::from(v))
+    .parse_stream(i)
+}
+
+fn fid<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
+  lazy_static! { static ref IDENT: Regex = Regex::new(r"[_a-z][a-zA-Z0-9_]*[\!\?=]?").unwrap(); }
   (match_(IDENT)).map(|v| Symbol::from(v))
     .parse_stream(i)
 }
 
 fn constant<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
-  lazy_static! { static ref CONST: Regex = Regex::new(r"[A-Z][a-zA-Z0-9_]*").unwrap(); }
+  lazy_static! { static ref CONST: Regex = Regex::new(r"[_A-Z][a-zA-Z0-9_]*").unwrap(); }
   (match_(CONST)).map(|v| Symbol::from(v))
     .parse_stream(i)
 }
 
 fn call_uni_op(recv: NodeRef, op: &str) -> NodeRef {
   nd!(CALL, recv, Symbol::from(op))
+}
+
+fn call_bin_op(l: NodeRef, op: &str, r: NodeRef) -> NodeRef {
+  nd!(CALL, l, Symbol::from(op), r)
+}
+
+fn call_with_block(n: NodeRef, b: NodeRef) -> NodeRef {
+  nd!(BLOCK_ARG, n, b)
 }
 
 fn top_stmts<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char>
@@ -517,7 +553,7 @@ fn opt_call_args<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item =
 fn call_args<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
   parser(command).map(|v| vec![v])
     .or((sep_by1(arg, comma_hd),
-         optiona((comma_hd, token('*'), arg).map(|_, _, sp| nd!(SPLAT, sp))),
+         optional((comma_hd, token('*'), arg).map(|_, _, sp| nd!(SPLAT, sp))),
          many((comma_hd, arg).map(|_, a| a)),
          optional((comma_hd, assoc).map(|_, h| nd!(HASH, h))),
          optional((comma_hd, blockarg).map(|_, b| b)))
@@ -585,20 +621,20 @@ fn primary<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
     .or(between((token('('), opt_ws_nl), (opt_ws_nl, token(')')), stmt))
     .or((token('('), opt_ws_nl, token(')')).map(|_, _, | nd!(NIL)))
     .or(between((token('('), opt_ws_nl), (opt_ws_nl, token(')')), compstmt))
-    .or((primary, opt_ws, string("::"), opt_ws_nl, constant).map(|prim, _, _, _, id| new_colon2(prim, id)))
-    .or((string("::"), opt_ws_nl, constant).map(|_, _, id| new_colon3(id)))
+    .or((primary, opt_ws, string("::"), opt_ws_nl, constant).map(|prim, _, _, _, id| nd!(COLON2, prim, id)))
+    .or((string("::"), opt_ws_nl, constant).map(|_, _, id| nd!(COLON3, id)))
     .or(between((token('['), opt_ws_nl), (opt_ws_nl, token(']')),
                 aref_args.map(|v| nd!(ARRAY, v))))
     .or(string("return").map(|_| nd!(RETURN, vec![])))
     .or((string("yield"), ws, paren_args).map(|_, _, args| nd!(YIELD, args)))
     .or((string("not"), ws, between((token('('), opt_ws_nl), (opt_ws_nl, token(')')),
                                     optional(expr)))
-        .map(|_, _, e| p.call_uni_op(match e { Some(e) => e, None => nd!(NIL) },
+        .map(|_, _, e| call_uni_op(match e { Some(e) => e, None => nd!(NIL) },
                                      Symbol::from("!"))))
     .or((operation, opt_ws_nl, brace_block).map(|op, _, b| nd!(FCALL, op, b)))
     .or((method_call, opt_ws_nl, brace_block).map(|op, _, b| call_with_block(op, b)))
     .or(method_call)
-    .or((string("->"), opt_ws_nl, flarglist, opt_ws_nl, lambdabody)
+    .or((string("->"), opt_ws_nl, f_larglist, opt_ws_nl, lambda_body)
         .map(|_, _, a, _, b| nd!(LAMBDA, a, b)))
     .or((string("if"), opt_ws_nl, expr, opt_ws, then, opt_ws_nl, compstmt, opt_ws_nl,
          if_tail, opt_ws_nl, string("end"))
@@ -610,13 +646,13 @@ fn primary<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
         .map(|_, _, c, _, _, _, s, _, t| nd!(WHILE, c, s, t)))
     .or((string("until"), opt_ws_nl, expr, opt_ws, do_, opt_ws_nl, compstmt, opt_ws_nl, string("end"))
         .map(|_, _, c, _, _, _, s, _, t| nd!(UNTIL, c, s, t)))
-    .or((string("case"), opt_ws_nl, expr, many(term), opt_ws_nl, casebody, opt_ws_nl, string("end"))
+    .or((string("case"), opt_ws_nl, expr, many(term), opt_ws_nl, case_body, opt_ws_nl, string("end"))
         .map(|_, _, c, _, _, _, s, _, t| nd!(CASE, c, s, t)))
-    .or((string("case"), opt_ws_nl, opt_ws_nl, casebody, opt_ws_nl, string("end"))
+    .or((string("case"), opt_ws_nl, opt_ws_nl, case_body, opt_ws_nl, string("end"))
         .map(|_, _, c, _, _, _, s, _, t| nd!(CASE, c, s, t)))
-    .or((string("for"), opt_ws_nl, forvar, opt_ws_nl, string("in"), opt_ws_nl, expr,
+    .or((string("for"), opt_ws_nl, for_var, opt_ws_nl, string("in"), opt_ws_nl, expr,
          opt_ws_nl, do_, opt_ws_nl, compstmt, string("end"))
-        .map(|_, _, c, _, _, _, s, _, t| nd!(FOR, v, e, s)))
+        .map(|_, _, c, _, _, _, s, _, t| nd!(FOR, c, t, s)))
     .or((string("class"), opt_ws_nl, cpath, opt_ws_nl, superclass, many(term),
          bodystmt, opt_ws_nl, string("end")).map(|_, _, c, _, s, _, b, _, _| nd!(CLASS, c, s, b)))
     .or((string("class"), opt_ws_nl, string("<<"), opt_ws_nl, expr, many(term),
@@ -624,7 +660,7 @@ fn primary<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
     .or((string("module"), opt_ws_nl, cpath, many(term),
          bodystmt, opt_ws_nl, string("end")).map(|_, _, c, _, s, _, b, _, _| nd!(SCLASS, c, b)))
     .or((string("def"), opt_ws_nl, fname, ws, farglist, term, bodystmt, opt_ws_nl, string("end"))
-        .map(|_, _, f, _, args, _, b, _, _| nd!(DEF, f, a, b)))
+        .map(|_, _, f, _, args, _, b, _, _| nd!(DEF, f, args, b)))
     .or(string("break").map(|_| nd!(BREAK, vec![])))
     .or(string("next").map(|_| nd!(NEXT, vec![])))
     .or(string("redo").map(|_| nd!(REDO, vec![])))
@@ -680,13 +716,13 @@ fn f_margs<I>(i: I) -> ParseResult<(Vec<NodeRef>, Option<OptNodeRef>, Vec<NodeRe
     .or((many((f_marg, opt_ws, token(','), opt_ws_nl).map(|v, _, _, _| v)),
          token('*'), opt_ws_nl, optional(ident), opt_ws,
          many((token(','), opt_ws_nl, f_marg, opt_ws).map(|v, _, _, _| v)))
-        .map(|pre, _, _, post, _, post| (pre, Some(post), post)))
+        .map(|pre, _, _, rest, _, post| (pre, Some(rest), post)))
     .parse_stream(i)
 }
 
 fn block_param_def<I>(i: I) -> ParseResult<(Vec<NodeRef>, Vec<NodeRef>), I> where I: Stream<Item = char> {
   string("||").map(|v| (vec![], vec![]))
-    .or((token('|'), opt_ws_nl, blockparam, optional(bvars), opt_ws_nl, token('|')))
+    .or((token('|'), opt_ws_nl, block_param, optional(bvars), opt_ws_nl, token('|')))
     .parse_stream(i)
 }
 
@@ -726,7 +762,7 @@ fn block_call<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
         .map(|b, _, c_op, _, op, a| nd!(CALL, b, op, a, c_op)))
     .or((block_call, opt_ws_nl, call_op2, opt_ws_nl, operation2, optional(paren_args),
          opt_ws_nl, brace_block)
-        .map(|b, _, c_op, _, op, a, _, br| call_with_block(nd!(CALL, b, op, a, c_op))), br)
+        .map(|b, _, c_op, _, op, a, _, br| call_with_block(nd!(CALL, b, op, a, c_op), br)))
     .or((block_call, opt_ws_nl, call_op2, opt_ws_nl, operation2, optional(paren_args),
          opt_ws_nl, do_block)
         .map(|b, _, c_op, _, op, a, _, br| call_with_block(nd!(CALL, b, op, a, c_op))))
@@ -748,7 +784,7 @@ fn method_call<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> 
         .map(|_, _, a| nd!(SUPER, a)))
     .or((string("super"))
         .map(|_, _, a| nd!(ZSUPER)))
-    .or((primary, opt_ws, token('['), opt_ws_nl, opt_callargs, rbracket)
+    .or((primary, opt_ws, token('['), opt_ws_nl, opt_call_args, rbracket)
         .map(|prim, _, _, _, a, _| nd!(CALL, prim, Symbol::from("[]"), a, ".")))
     .parse_stream(i)
 }
@@ -765,7 +801,7 @@ fn brace_block<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> 
 fn case_body<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
   (string("when"), opt_ws_nl, sep_by(arg, (opt_ws, token(','), opt_ws_nl)),
    opt_ws, then, opt_ws_nl, compstmt, cases)
-    .map(|_, _, l, _, _, s_, c| (l, s, Some(c)))
+    .map(|_, _, l, _, _, s, c| (l, s, Some(c)))
     .parse_stream(i)
 }
 
@@ -796,24 +832,29 @@ fn literal<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
     .parse_stream(i)
 }
 
+fn char_token<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  (token('?'), any).map(|_, v| v)
+    .parse_stream(i)
+}
+
 fn string<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
   parser(char_token)
-    .or(string_token)
     .or((string_beg, many(string_interp), string_token)
         .map(|_, r, s| { r.push(s); nd!(DSTR, r) }))
+    .or((token('"'), string("\\\"").or(none_of("\"".chars())), token('"')).map(|_, s, _| s))
     .parse_stream(i)
 }
 
 fn string_interp<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char> {
   (string_mid).map(|v| vec![v])
-    .or((string_part, compstmt, token('}')).map(|p, s, _| vec![p, s]))
+    .or((string("#{"), compstmt, token('}')).map(|p, s, _| vec![p, s]))
     .or((literal_delim).map(|v| vec![nd!(LITERAL_DELIM)]))
     .or((hd_literal_delim, heredoc_body).map(|v| vec![nd!(LITERAL_DELIM)]))
     .parse_stream(i)
 }
 
 fn xstring<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
-  (xstring_beg, xstring_token).map(|_, v| v)
+  (token('`'), string("\\`").or(none_of("`".chars())), token('`')).map(|_, v, _| v)
     .or((xstring_beg, many(string_interp), xstring_token)
         .map(|_, r, s| { r.push(s); nd!(DXSTR, r) }))
     .parse_stream(i)
@@ -830,7 +871,7 @@ fn heredoc<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
 }
 
 fn heredoc_body<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
-  (many(HeredocStringInterp), heredoc_end)
+  (many(heredoc_string_interp), heredoc_end)
     .parse_stream(i)
 }
 
@@ -856,7 +897,7 @@ fn symbol<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
 }
 
 fn basic_symbol<I>(i: I) -> ParseResult<Symbol, I> where I: Stream<Item = char> {
-  (symbeg, sym).map(|_, v| v)
+  (token(':'), sym).map(|_, v| v)
     .parse_stream(i)
 }
 
@@ -866,7 +907,7 @@ fn sym<I>(i: I) -> ParseResult<Symbol, I> where I: Stream<Item = char> {
     .or(gvar)
     .or(cvar)
     .or((string).map(|v| Symbol::from(v)))
-    .or((string_beg, string).map(|_, v| Symbol::from(v)))
+    .or((token('\''), many(string("\\'").or(none_of('\''))), token('\'')).map(|_, v, _| Symbol::from(v)))
     .parse_stream(i)
 }
 
@@ -923,11 +964,11 @@ fn farglist<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char
     .parse_stream(i)
 }
 
-fn fargs<I>(i: I) -> ParseResult<Vec<NodeRef>, I> where I: Stream<Item = char> {
-  (many((farg_item, opt_ws, token(','))), many((f_opt, opt_ws, ",")),
+fn fargs<I>(i: I) -> ParseResult<NodeRef, I> where I: Stream<Item = char> {
+  (many((f_arg_item, opt_ws, token(','))), many((f_opt, opt_ws, ",")),
    f_restarg, many1((token(','), f_arg_item)), many((token(','), f_opt)),
    optional((token(','), f_blockarg)))
-    .map(|| nd!(ARGS, pre, o, r, post, b))
+    .map(|pre, o, r, post, post_opt, b| nd!(ARGS, pre, o, r, post, post_opt, b))
     .or((many(f_arg_item, opt_ws, token(',')), sep_by1(f_opt, token(',')),
          optional((token(','), opt_ws_nl, f_blockarg)))
         .map(|| {
@@ -1052,7 +1093,7 @@ fn term<I>(i: I) -> ParseResult<(), I> where I: Stream<Item = char> {
 }
 
 fn comment<I>(i: I) -> ParseResult<String, I> where I: Stream<Item = char> {
-  (opt_ws, token('#'), many(none_of("\n")), token('\n'))
+  (opt_ws, token('#'), many(none_of("\n".chars())), token('\n'))
     .map(|_, _, com, _| String::from_utf8(com).unwrap())
     .parse_stream(i)
 }
