@@ -25,8 +25,6 @@ macro_rules! nd {
   );
 }
 
-fn 
-
 macro_rules! kw {
   ($k:ident) => { (range(stringify!($k).as_bytes()[..]),
                    look_ahead(not_followed_by(one_of("!?=_".bytes())
