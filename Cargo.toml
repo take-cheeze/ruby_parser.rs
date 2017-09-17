@@ -4,10 +4,6 @@ version = "0.1.0"
 authors = ["take_cheeze <takechi101010@gmail.com>"]
 
 [dependencies]
-regex = "0.2.1"
 string_cache = "0.6"
-lazy_static = "0.2"
-
-[dependencies.combine]
-version = '2.5.1'
-features = ['regex']
+combine = '2.5.1'
+ascii = { version = "0.8", default-features = false }

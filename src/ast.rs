@@ -1,4 +1,4 @@
-pub enum Type {
+pub enum Kind {
   METHOD,
   FBODY,
   CFUNC,
@@ -56,11 +56,8 @@ pub enum Type {
   LAMBDA,
   SYM,
   STR,
-  DSTR,
   XSTR,
-  DXSTR,
   REGX,
-  DREGX,
   DREGX_ONCE,
   LIST,
   ARG,
@@ -109,79 +106,61 @@ pub enum Type {
 pub type NodeRef = Box<Node>;
 pub type OptNodeRef = Option<NodeRef>;
 
-pub trait Node {
-  fn node_type(&self) -> Type;
-  fn children(&self) -> &Vec<NodeRef>;
+pub enum Value {
+  Children(Vec<NodeRef>),
+  Sym(::Symbol),
+  Int(i32),
+  Flt(Vec<u8>),
+  Str(Vec<u8>),
+}
 
-  fn file(&self) -> &str;
-  fn line(&self) -> u32;
-  fn column(&self) -> u32;
+pub struct Node {
+  pub kind: Kind,
+  pub value: Value,
+  file_: String,
+  line_: u32,
+  column_: u32,
+}
 
-  fn set_file(&mut self);
-  fn set_line(&mut self);
-  fn set_column(&mut self);
+impl Node {
+  pub fn new(t: Kind, c: Vec<NodeRef>) -> NodeRef {
+    Box::new(Node { kind: t, value: Value::Children(c),
+                        file_: String::new(), line_: 0, column_: 0 })
+  }
 
-  fn set_source_location(&mut self, src: &mut Node) {
+  pub fn new_sym(t: Kind, v: ::Symbol) -> NodeRef {
+    Box::new(Node { kind: t, value: Value::Sym(v),
+                        file_: String::new(), line_: 0, column_: 0 })
+  }
+
+  pub fn new_int(t: Kind, v: i32) -> NodeRef {
+    Box::new(Node { kind: t, value: Value::Int(v),
+                        file_: String::new(), line_: 0, column_: 0 })
+  }
+
+  pub fn new_flt(t: Kind, v: Vec<u8>) -> NodeRef {
+    Box::new(Node { kind: t, value: Value::Flt(v),
+                        file_: String::new(), line_: 0, column_: 0 })
+  }
+
+  pub fn new_str(t: Kind, v: Vec<u8>) -> NodeRef {
+    Box::new(Node { kind: t, value: Value::Str(v),
+                        file_: String::new(), line_: 0, column_: 0 })
+  }
+
+  pub fn file(&self) -> &str { self.file_.as_str() }
+  pub fn line(&self) -> u32 { self.line_ }
+  pub fn column(&self) -> u32 { self.column_ }
+
+  pub fn set_file(&mut self, f: &str) { self.file_.clear(); self.file_.insert_str(0, f); }
+  pub fn set_line(&mut self, l: u32) { self.line_ = l; }
+  pub fn set_column(&mut self, c: u32) { self.column_ = c; }
+
+  pub fn set_source_location(&mut self, src: &mut Node) {
     self.set_line(src.line());
     self.set_column(src.column());
     self.set_file(src.file());
   }
-}
-
-struct NodeImpl {
-  node_type_: Type,
-  children_: Vec<NodeRef>,
-  file_: String,
-  line_: u32,
-  column_: u32,
-}
-
-impl NodeImpl {
-  fn new(t: Type, c: Vec<NodeRef>) -> NodeRef {
-    Box::new(NodeImpl { node_type_: t, children_: c,
-                        file_: "", line_: 0, column_: 0 })
-  }
-}
-
-impl Node for NodeImpl {
-  fn node_type(&self) -> Type { self.node_type_ }
-  fn children(&self) -> &Vec<NodeRef> { self.children_ }
-
-  fn file(&self) -> &str { self.file_.str() }
-  fn line(&self) -> u32 { self.line_ }
-  fn column(&self) -> u32 { self.column_ }
-
-  fn set_file(&mut self) {}
-  fn set_line(&mut self) {}
-  fn set_column(&mut self) {}
-}
-
-pub struct LiteralNode<T> {
-  node_type_: Type,
-  vaiue: T,
-  file_: String,
-  line_: u32,
-  column_: u32,
-}
-
-impl<T> LiteralNode<T> {
-  fn new(t: Type, v: T) -> NodeRef {
-    Box::new(LiteralNode { node_type_: t, value: v,
-                           file_: "", line_: 0, column_: 0 })
-  }
-}
-
-impl<T> Node for LiteralNode<T> {
-  fn node_type(&self) -> Type { self.node_type_ }
-  fn children(&self) -> &Vec<NodeRef> { vec![] }
-
-  fn file(&self) -> &str { self.file_.str() }
-  fn line(&self) -> u32 { self.line_ }
-  fn column(&self) -> u32 { self.column_ }
-
-  fn set_file(&mut self) {}
-  fn set_line(&mut self) {}
-  fn set_column(&mut self) {}
 }
 
 pub enum CpathType { Absolute, Relative, Expression(NodeRef) }
