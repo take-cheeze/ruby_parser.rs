@@ -128,8 +128,8 @@ impl Node {
                         file_: String::new(), line_: 0, column_: 0 })
   }
 
-  pub fn new_sym(t: Kind, v: ::Symbol) -> NodeRef {
-    Box::new(Node { kind: t, value: Value::Sym(v),
+  pub fn new_sym(v: ::Symbol) -> NodeRef {
+    Box::new(Node { kind: Kind::SYM, value: Value::Sym(v),
                         file_: String::new(), line_: 0, column_: 0 })
   }
 

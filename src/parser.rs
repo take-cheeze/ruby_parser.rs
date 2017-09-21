@@ -109,11 +109,11 @@ parser!{
 }
 
 fn call_uni_op(recv: NodeRef, op: Symbol) -> NodeRef {
-  nd!(CALL, recv, Node::new_sym(Kind::SYM, op))
+  nd!(CALL, recv, Node::new_sym(op))
 }
 
 fn call_bin_op(l: NodeRef, op: Symbol, r: NodeRef) -> NodeRef {
-  nd!(CALL, l, Node::new_sym(Kind::SYM, op), r)
+  nd!(CALL, l, Node::new_sym(op), r)
 }
 
 fn call_with_block(n: NodeRef, b: NodeRef) -> NodeRef {
@@ -719,14 +719,14 @@ parser!{
       literal(),
       var_ref(),
       backref(),
-      fid().map(|v| nd!(FCALL, Node::new_sym(Kind::SYM, v))),
+      fid().map(|v| nd!(FCALL, Node::new_sym(v))),
       between((kw!(begin), ws_nl()), (opt_ws_nl(), kw!(end)), bodystmt()),
       between((token(b'('), opt_ws_nl()), (opt_ws_nl(), token(b')')), stmt()),
       (token(b'('), opt_ws_nl(), token(b')')).map(|(_, _, _)| nd!(NIL)),
       between((token(b'('), opt_ws_nl()), (opt_ws_nl(), token(b')')), compstmt()),
       (primary, opt_ws, range(&b"::"[..]), opt_ws_nl(), constant())
-        .map(|(prim, _, _, _, id)| nd!(COLON2, prim, id)),
-      (range(&b"::"[..]), opt_ws_nl(), constant()).map(|(_, _, id)| nd!(COLON3, id)),
+        .map(|(prim, _, _, _, id)| nd!(COLON2, prim, Node::new_sym(id))),
+      (range(&b"::"[..]), opt_ws_nl(), constant()).map(|(_, _, id)| nd!(COLON3, Node::new_sym(id))),
       between((token(b'['), opt_ws_nl()), (opt_ws_nl(), token(b']')),
               aref_args().map(|v| nd!(ARRAY; v))),
       kw!(return).map(|_| nd!(RETURN)),
@@ -735,23 +735,23 @@ parser!{
                              optional(expr())))
         .map(|(_, _, e)| call_uni_op(match e { Some(e) => e, None => nd!(NIL) },
                                      Symbol::from("!"))),
-      (operation(), opt_ws_nl(), brace_block()).map(|(op, _, b)| nd!(FCALL, op, b)),
+      (operation(), opt_ws_nl(), brace_block()).map(|(op, _, b)| nd!(FCALL, Node::new_sym(op), b)),
       (method_call(), opt_ws_nl(), brace_block()).map(|(op, _, b)| call_with_block(op, b)),
       method_call(),
       (range(&b"->"[..]), opt_ws_nl(), f_larglist(), opt_ws_nl(), lambda_body())
         .map(|(_, _, a, _, b)| nd!(LAMBDA, a, b)),
       (kw!(if), opt_ws_nl(), expr, opt_ws, then, opt_ws_nl(), compstmt(), opt_ws_nl(),
        if_tail, opt_ws_nl(), kw!(end))
-        .map(|(_, _, c, _, _, _, s, _, t)| nd!(IF, c, s, t)),
+        .map(|(_, _, c, _, _, _, s, _, t, _, _)| nd!(IF, c, s, t)),
       (kw!(unless), opt_ws_nl(), expr(), opt_ws(), then(), opt_ws_nl(), compstmt(), opt_ws_nl(),
        else_(), opt_ws_nl(), kw!(end))
-        .map(|(_, _, c, _, _, _, s, _, t)| nd!(UNLESS, c, s, t)),
+        .map(|(_, _, c, _, _, _, s, _, t, _, _)| nd!(IF, c, t, s)),
       (kw!(while), opt_ws_nl(), expr(), opt_ws(), do_(), opt_ws_nl(), compstmt(), opt_ws_nl(), kw!(end))
-        .map(|(_, _, c, _, _, _, s, _, t)| nd!(WHILE, c, s, t)),
+        .map(|(_, _, c, _, _, _, s, _, _)| nd!(WHILE, c, s)),
       (kw!(until), opt_ws_nl(), expr(), opt_ws(), do_(), opt_ws_nl(), compstmt(), opt_ws_nl(), kw!(end))
-        .map(|(_, _, c, _, _, _, s, _, t)| nd!(UNTIL, c, s, t)),
+        .map(|(_, _, c, _, _, _, s, _, _)| nd!(UNTIL, c, s)),
       (kw!(case), opt_ws_nl(), expr(), many(term()), opt_ws_nl(), case_body(), opt_ws_nl(), kw!(end))
-        .map(|(_, _, c, _, _, _, s, _, t)| nd!(CASE, c, s, t)),
+        .map(|(_, _, c, _, _, s, _, _)| nd!(CASE, c, s)),
       (kw!(case), opt_ws_nl(), opt_ws_nl(), case_body(), opt_ws_nl(), kw!(end))
         .map(|(_, _, c, _, _, _, s, _, t)| nd!(CASE, c, s, t)),
       (kw!(for), opt_ws_nl(), for_var, opt_ws_nl(), kw!(in), opt_ws_nl(), expr,
@@ -1038,7 +1038,7 @@ parser!{
            range(&b"\\#"[..]).map(|_| '#'),
            range(&b"\\'"[..]).map(|_| '\''),
            none_of(range(&b"'#"[..]))
-         ]).map(|v| Node::new_sym(Kind::SYM, Symbol::from(v))),
+         ]).map(|v| Node::new_str(Kind::STR, Symbol::from(v))),
          (range(&b"#{"[..]), compstmt, token(b'}')).map(|(_, s, _)| s)
        ]),
        token('"'))]
